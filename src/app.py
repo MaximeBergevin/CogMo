@@ -10,7 +10,7 @@
 import dash
 from dash import dcc, html
 import dash_bootstrap_components as dbc
-from dash.dependencies import Input, Output, State
+from dash.dependencies import Input, Output, State, ALL
 import io
 import base64
 from pathlib import Path
@@ -22,10 +22,27 @@ import pandas as pd
 from get_condition_lookup import get_condition_lookup
 from load_signal import load_signal
 import time
+import re
+import logging
 
 # Initialize the Dash app with Bootstrap theme
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.MINTY])
+app = dash.Dash(__name__,
+                 external_stylesheets=[dbc.themes.MINTY],
+                 prevent_initial_callbacks = True)
 
+
+# ==============================================================================
+# --- HELPER FUNCTIONS ---
+# ==============================================================================
+def find_best_match(channel_names: list, patterns: list) -> str | None:
+    """
+    Finds the first channel name that matches any of the given patterns.
+    """
+    for channel in channel_names:
+        for pattern in patterns:
+            if re.match(pattern, channel):
+                return channel
+    return None
 
 # ==============================================================================
 # --- APP LAYOUT (UI) ---
@@ -45,7 +62,8 @@ app.layout = dbc.Container([
                                 dcc.Upload(
                                     id='upload-signal-data',
                                     children=html.Div([
-                                        'Signal Data File'
+                                        'Drag and Drop or ',
+                                        html.A('Select Signal Data File')
                                     ]),
                                     style={
                                         'height': '60px',
@@ -67,7 +85,8 @@ app.layout = dbc.Container([
                                 dcc.Upload(
                                     id='upload-condition-order',
                                     children=html.Div([
-                                        'Condtion Order File'
+                                        'Drag and Drop or ',
+                                        html.A('Select Condition Order File')
                                     ]),
                                     style={
                                         'height': '60px',
@@ -83,19 +102,23 @@ app.layout = dbc.Container([
                             width=6,
                         ),
                     ]),
+                    
+                    # --- Channel Mapping Section ---
+                    html.Div(id='channel-mapping-container', className="mt-4"),
+                    
                     # --- Baseline Reference values ---
                     html.H4("Baseline Reference values", className="mt-4"),
                     dbc.Row([
                         dbc.Col(
                             dbc.FormFloating([
-                                dbc.Input(type="number", id="input-mvf-left", placeholder="Left"),
+                                dbc.Input(type="number", id="input-mvc-left", placeholder="Left"),
                                 dbc.Label("Maximum voluntary force (Left)")
                             ]),
                             width=6
                         ),
                         dbc.Col(
                             dbc.FormFloating([
-                                dbc.Input(type="number", id="input-mvf-right", placeholder="Right"),
+                                dbc.Input(type="number", id="input-mvc-right", placeholder="Right"),
                                 dbc.Label("Maximum voluntary force (Right)")
                             ]),
                             width=6
@@ -120,7 +143,7 @@ app.layout = dbc.Container([
                     # --- Output Message ---
                     dcc.Loading(
                         id="loading-output-message",
-                        type="default",
+                        type="dot",
                         children=html.Div(id='upload-output-message', className="mt-3"),
                     )
                 ], className="p-3")
@@ -157,155 +180,138 @@ app.layout = dbc.Container([
 ], fluid=False, style={'width': '1000px', 'overflow-x': 'hidden'})
 
 # Add dcc.Store components to save the identified comment types and reference values
-app.layout.children.append(dcc.Store(id='block-comments-store'))
-app.layout.children.append(dcc.Store(id='stimulus-comments-store'))
-app.layout.children.append(dcc.Store(id='mvf-left-store'))
-app.layout.children.append(dcc.Store(id='mvf-right-store'))
-app.layout.children.append(dcc.Store(id='rfd-left-store'))
-app.layout.children.append(dcc.Store(id='rfd-right-store'))
+# File storage (as data frame) and channel mapping
+# ---------------------------------------------------
+app.layout.children.append(dcc.Store(id = 'condition-data-store')),
+app.layout.children.append(dcc.Store(id = 'signal-data-store')),
+# Comment types stored as a list of strings
+# ---------------------------------------------------
+app.layout.children.append(dcc.Store(id = 'block-comments-store'))
+app.layout.children.append(dcc.Store(id = 'stimulus-comments-store'))
+# Reference values stored as floats
+# ---------------------------------------------------
+app.layout.children.append(dcc.Store(id = 'mvc-left-store'))
+app.layout.children.append(dcc.Store(id = 'mvc-right-store'))
+app.layout.children.append(dcc.Store(id = 'rfd-left-store'))
+app.layout.children.append(dcc.Store(id = 'rfd-right-store'))
+app.layout.children.append(dcc.Store(id = 'force-channels-store'))
+app.layout.children.append(dcc.Store(id = 'emg-channels-store'))
 
 
 # ==============================================================================
 # --- CALLBACKS (Backend Logic) ---
 # ==============================================================================
+
+# 1. Callback for Signal Data Upload
+# ----------------------------------
 @app.callback(
-    Output('upload-output-message', 'children'),
-    Output('block-comments-store', 'data'),
-    Output('stimulus-comments-store', 'data'),
-    Output('mvf-left-store', 'data'),
-    Output('mvf-right-store', 'data'),
-    Output('rfd-left-store', 'data'),
-    Output('rfd-right-store', 'data'),
+    Output('signal-data-store', 'data', allow_duplicate=True),
+    Output('block-comments-store', 'data', allow_duplicate=True),
+    Output('stimulus-comments-store', 'data', allow_duplicate=True),
+    Output('channel-mapping-container', 'children', allow_duplicate=True),
     Input('upload-signal-data', 'contents'),
-    Input('upload-condition-order', 'contents'),
-    Input('input-mvf-left', 'value'),
-    Input('input-mvf-right', 'value'),
+    State('upload-signal-data', 'filename'),
+    prevent_initial_callbacks = True
+)
+def upload_signal_data_callback(signal_contents, signal_filename):
+    if signal_contents is None:
+        raise dash.exceptions.PreventUpdate
+
+    content_type, content_string=signal_contents.split(',')
+    
+    # Save the uploaded file temporarily
+    temp_dir = Path("./temp_uploads")
+    temp_dir.mkdir(exist_ok=True)
+    temp_filepath = temp_dir / signal_filename
+    
+    try:
+        decoded = base64.b64decode(content_string)
+        with open(temp_filepath, 'wb') as f:
+            f.write(decoded)
+        
+        # Load and process the signal data
+        df, comment_summary = load_signal(temp_filepath)
+        
+        # Find the lowest block count and total stimulus count, and capture comment types
+        block_comments = []
+        stimulus_comments = []
+
+        if comment_summary:
+            for comment_type, count in comment_summary.items():
+                comment_lower = comment_type.lower()
+                if 'block' in comment_lower:
+                    if comment_type not in block_comments:
+                        block_comments.append(comment_type)
+                elif 'stimulus' in comment_lower:
+                    if comment_type not in stimulus_comments:
+                        stimulus_comments.append(comment_type)
+        
+        # For now, we return a simple placeholder for the channel mapping UI,
+        # as we will build this out in a separate step.
+        channel_mapping_ui = html.Div([
+            html.H4("Channel Mapping"),
+            html.P("This section will contain channel selection dropdowns.")
+        ])
+
+    except Exception as e:
+        block_comments_data = None
+        stimulus_comments_data = None
+        channel_mapping_ui = html.Div(f'There was an error processing this file: {e}', className="text-danger")
+        df = None
+    finally:
+        # Clean up the temporary file and directory
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        
+    return df.to_dict('records'), block_comments, stimulus_comments, channel_mapping_ui
+
+
+# 2. Callback for Condition Order File Upload
+# -------------------------------------------
+@app.callback(
+        Output('condition-data-store', 'data', allow_duplicate = True),
+        Input('upload-condition-order', 'contents'),
+        State('upload-condition-order', 'filename'),
+        prevent_initial_callbacks = True
+    
+)
+def upload_condition_callback(condition_contents, condition_filename):
+    if condition_contents is None:
+        raise dash.exceptions.PreventUpdate
+    content_type, content_string = condition_contents.split(',')
+
+    try:
+        decoded = base64.b64decode(content_string)
+        # Read file based on its extension
+        if condition_filename.endswith('.xlsx'):
+            df = pd.read_excel(io.BytesIO(decoded))
+        elif condition_filename.endswith('.csv'):
+            df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
+        else:
+            return None
+        
+        #TODO: Comment out for deployment, this is for debugging/testing purposes
+        #logging.info(f"Head of condition order data frame:\n{df.head()}")
+
+        return df.to_dict('records')
+    
+    except Exception as e:
+        return None
+
+# 3. Callback for Baseline Reference Value Updates
+# ------------------------------------------------
+@app.callback(
+    Output('mvc-left-store', 'data', allow_duplicate=True),
+    Output('mvc-right-store', 'data', allow_duplicate=True),
+    Output('rfd-left-store', 'data', allow_duplicate=True),
+    Output('rfd-right-store', 'data', allow_duplicate=True),
+    Input('input-mvc-left', 'value'),
+    Input('input-mvc-right', 'value'),
     Input('input-rfd-left', 'value'),
     Input('input-rfd-right', 'value'),
-    State('upload-signal-data', 'filename'),
-    State('upload-signal-data', 'last_modified'),
-    State('upload-condition-order', 'filename'),
-    State('upload-condition-order', 'last_modified')
+    prevent_initial_callbacks=True
 )
-def update_output(signal_contents, condition_contents, mvf_left, mvf_right, rfd_left, rfd_right, signal_filename, signal_last_modified, condition_filename, condition_last_modified):
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        return (
-            html.Div("Please upload a file to begin."),
-            None,
-            None,
-            mvf_left,
-            mvf_right,
-            rfd_left,
-            rfd_right
-        )
-    
-    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
-
-    # Initialize return values
-    message = html.Div("Please upload a file to begin.")
-    block_comments_data = None
-    stimulus_comments_data = None
-
-    # 1. Logic for Signal Data Upload
-    # -------------------------------
-    if trigger_id == 'upload-signal-data' and signal_contents is not None:
-        content_type, content_string = signal_contents.split(',')
-        
-        # Save the uploaded file temporarily
-        temp_dir = Path("./temp_uploads")
-        temp_dir.mkdir(exist_ok=True)
-        temp_filepath = temp_dir / signal_filename
-        
-        try:
-            decoded = base64.b64decode(content_string)
-            with open(temp_filepath, 'wb') as f:
-                f.write(decoded)
-            
-            # Load and process the signal data
-            df, comment_summary = load_signal(temp_filepath)
-            
-            # Find the lowest block count and total stimulus count, and capture comment types
-            num_blocks = float('inf')
-            num_stimulus = 0
-            block_comments = []
-            stimulus_comments = []
-
-            if comment_summary:
-                for comment_type, count in comment_summary.items():
-                    comment_lower = comment_type.lower()
-                    if 'block' in comment_lower:
-                        num_blocks = min(num_blocks, count)
-                        if comment_type not in block_comments:
-                            block_comments.append(comment_type)
-                    elif 'stimulus' in comment_lower:
-                        num_stimulus += count
-                        if comment_type not in stimulus_comments:
-                            stimulus_comments.append(comment_type)
-            
-            # Store the comment lists
-            block_comments_data = block_comments
-            stimulus_comments_data = stimulus_comments
-
-            # Adjust the message to reflect the new logic
-            blocks_message = f"Lowest block count detected: {num_blocks}" if num_blocks != float('inf') else "No blocks detected."
-            stimulus_message = f"Total stimulus trials detected: {num_stimulus}" if num_stimulus != 0 else "No stimulus trials detected."
-            block_comments_message = f"Block comments found: {', '.join(block_comments)}" if block_comments else "No block comments found."
-            stimulus_comments_message = f"Stimulus comments found: {', '.join(stimulus_comments)}" if stimulus_comments else "No stimulus comments found."
-
-            message = html.Div([
-                html.H5("Data successfully uploaded"),
-                html.P(blocks_message),
-                html.P(stimulus_message),
-                html.P(block_comments_message),
-                html.P(stimulus_comments_message)
-            ])
-
-        except Exception as e:
-            message = html.Div(f'There was an error processing this file: {e}', className="text-danger")
-        finally:
-            # Clean up the temporary file and directory
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        
-        return message, block_comments_data, stimulus_comments_data, mvf_left, mvf_right, rfd_left, rfd_right
-
-
-    # 2. Logic for Condition Order File Upload
-    # ----------------------------------------
-    elif trigger_id == 'upload-condition-order' and condition_contents is not None:
-        content_type, content_string = condition_contents.split(',')
-        try:
-            decoded = base64.b64decode(content_string)
-            
-            # Read the file based on its extension
-            if condition_filename.endswith('.xlsx'):
-                df = pd.read_excel(io.BytesIO(decoded))
-            elif condition_filename.endswith('.csv'):
-                df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
-            else:
-                message = html.Div("Unsupported file format. Please upload an .xlsx or .csv file.", className="text-danger")
-
-            # Use the get_condition_lookup function
-            lookup_result = get_condition_lookup(df)
-            
-            if lookup_result:
-                participant_id = lookup_result['participant_id']
-                condition_counts_df = lookup_result['condition_counts']
-                
-                # Format the output message with participant ID and a table of condition counts
-                message = html.Div([
-                    html.H5("Condition file successfully processed"),
-                    html.P(f"Participant ID: {participant_id}"),
-                    html.P("Condition Counts:"),
-                    html.Div(html.Pre(condition_counts_df.to_string()))
-                ])
-            else:
-                message = html.Div("Could not extract condition data from the file. Please check column names.", className="text-danger")
-
-        except Exception as e:
-            message = html.Div(f"Error processing condition file: {e}", className="text-danger")
-    
-    return message, block_comments_data, stimulus_comments_data, mvf_left, mvf_right, rfd_left, rfd_right
+def update_reference_values(mvc_left, mvc_right, rfd_left, rfd_right):
+    return mvc_left, mvc_right, rfd_left, rfd_right
 
 
 # ==============================================================================

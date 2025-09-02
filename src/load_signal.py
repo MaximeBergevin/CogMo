@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 import warnings
 from typing import Optional
+import logging
 
 # ==============================================================================
 # --- HELPER FUNCTION ---
@@ -117,7 +118,7 @@ def load_signal(filepath: Path) -> tuple[pd.DataFrame, dict]:
             data_frame['trial_number'] = data_frame.groupby('block_number')['is_trial_start'].cumsum()
         else:
             warnings.warn("Could not determine block and stimulus comments from counts. Block and trial columns will not be created.")
-            
+
     return data_frame, comment_summary
 
 # ==============================================================================
