@@ -23,7 +23,7 @@ from get_condition_lookup import get_condition_lookup
 from load_signal import load_signal
 import time
 import re
-import logging
+import warnings
 
 # Initialize the Dash app with Bootstrap theme
 app = dash.Dash(__name__,
@@ -62,8 +62,7 @@ app.layout = dbc.Container([
                                 dcc.Upload(
                                     id='upload-signal-data',
                                     children=html.Div([
-                                        'Drag and Drop or ',
-                                        html.A('Select Signal Data File')
+                                        'Your raw data here (.csv, .tsv, .txt, .xlsx)'
                                     ]),
                                     style={
                                         'height': '60px',
@@ -75,6 +74,11 @@ app.layout = dbc.Container([
                                     },
                                     multiple=False
                                 ),
+                                dcc.Loading(
+                                    id="data-upload-throbber",
+                                    type="dot",
+                                    children=html.Div(id='data-upload-output-message', className="mt-3"),
+                                )
                             ]),
                             width=6,
                         ),
@@ -85,8 +89,7 @@ app.layout = dbc.Container([
                                 dcc.Upload(
                                     id='upload-condition-order',
                                     children=html.Div([
-                                        'Drag and Drop or ',
-                                        html.A('Select Condition Order File')
+                                        'Your condition file here (.xlsx or .csv)'
                                     ]),
                                     style={
                                         'height': '60px',
@@ -98,6 +101,11 @@ app.layout = dbc.Container([
                                     },
                                     multiple=False
                                 ),
+                                dcc.Loading(
+                                    id = 'condition-upload-throbber',
+                                    type = 'dot',
+                                    children = html.Div(id = 'condition-upload-output-message', className='"mt-2")')
+                                )
                             ]),
                             width=6,
                         ),
@@ -139,13 +147,7 @@ app.layout = dbc.Container([
                             ]),
                             width=6
                         ),
-                    ]),
-                    # --- Output Message ---
-                    dcc.Loading(
-                        id="loading-output-message",
-                        type="dot",
-                        children=html.Div(id='upload-output-message', className="mt-3"),
-                    )
+                    ]),                   
                 ], className="p-3")
             ]
         ),
@@ -182,8 +184,8 @@ app.layout = dbc.Container([
 # Add dcc.Store components to save the identified comment types and reference values
 # File storage (as data frame) and channel mapping
 # ---------------------------------------------------
-app.layout.children.append(dcc.Store(id = 'condition-data-store')),
 app.layout.children.append(dcc.Store(id = 'signal-data-store')),
+app.layout.children.append(dcc.Store(id = 'condition-data-store')),
 # Comment types stored as a list of strings
 # ---------------------------------------------------
 app.layout.children.append(dcc.Store(id = 'block-comments-store'))
@@ -208,12 +210,13 @@ app.layout.children.append(dcc.Store(id = 'emg-channels-store'))
     Output('signal-data-store', 'data', allow_duplicate=True),
     Output('block-comments-store', 'data', allow_duplicate=True),
     Output('stimulus-comments-store', 'data', allow_duplicate=True),
-    Output('channel-mapping-container', 'children', allow_duplicate=True),
+    Output('data-upload-output-message', 'children', allow_duplicate=True),
     Input('upload-signal-data', 'contents'),
     State('upload-signal-data', 'filename'),
     prevent_initial_callbacks = True
 )
 def upload_signal_data_callback(signal_contents, signal_filename):
+    message = "" # Initialize to avoid potential NameError 
     if signal_contents is None:
         raise dash.exceptions.PreventUpdate
 
@@ -231,7 +234,13 @@ def upload_signal_data_callback(signal_contents, signal_filename):
         
         # Load and process the signal data
         df, comment_summary = load_signal(temp_filepath)
-        
+
+         # Message not printed, but stored in dcc.Store linked to dcc.Loading for throbber 
+        if not df.empty and not comment_summary:
+            message = f"File uploaded but there was an issue with processing"
+        else:
+            message = "Data uploaded successfully."
+
         # Find the lowest block count and total stimulus count, and capture comment types
         block_comments = []
         stimulus_comments = []
@@ -245,36 +254,42 @@ def upload_signal_data_callback(signal_contents, signal_filename):
                 elif 'stimulus' in comment_lower:
                     if comment_type not in stimulus_comments:
                         stimulus_comments.append(comment_type)
-        
-        # For now, we return a simple placeholder for the channel mapping UI,
-        # as we will build this out in a separate step.
-        channel_mapping_ui = html.Div([
-            html.H4("Channel Mapping"),
-            html.P("This section will contain channel selection dropdowns.")
-        ])
+
+         # TODO: Comment out for deployment, this is for debugging/testing purposes
+        print(df.head())
+        # dcc.Store can't handle pd DataFrame. Need to convert df to dict first.
+        df = df.to_dict('records')
+        print(comment_summary)
+        print(f"Block comments: {block_comments}")
+        print(f"Stimulus comments: {stimulus_comments}")
+        print(message)
+
+        return df, block_comments, stimulus_comments, message
 
     except Exception as e:
-        block_comments_data = None
-        stimulus_comments_data = None
-        channel_mapping_ui = html.Div(f'There was an error processing this file: {e}', className="text-danger")
+        block_comments = None
+        stimulus_comments = None
         df = None
+
+        return df, block_comments, stimulus_comments, message
+        
     finally:
         # Clean up the temporary file and directory
         shutil.rmtree(temp_dir, ignore_errors=True)
-        
-    return df.to_dict('records'), block_comments, stimulus_comments, channel_mapping_ui
 
 
 # 2. Callback for Condition Order File Upload
 # -------------------------------------------
 @app.callback(
         Output('condition-data-store', 'data', allow_duplicate = True),
+        Output('condition-upload-output-message', 'children', allow_duplicate = True),
         Input('upload-condition-order', 'contents'),
         State('upload-condition-order', 'filename'),
         prevent_initial_callbacks = True
     
 )
 def upload_condition_callback(condition_contents, condition_filename):
+    message = "" # Initialize to avoid potential NameError
     if condition_contents is None:
         raise dash.exceptions.PreventUpdate
     content_type, content_string = condition_contents.split(',')
@@ -288,11 +303,9 @@ def upload_condition_callback(condition_contents, condition_filename):
             df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
         else:
             return None
-        
-        #TODO: Comment out for deployment, this is for debugging/testing purposes
-        #logging.info(f"Head of condition order data frame:\n{df.head()}")
-
-        return df.to_dict('records')
+        # Message not printed, but stored in dcc.Store linked to dcc.Loading for throbber 
+        message = f' Condition file uploaded successfully.'
+        return df.to_dict('records'), message
     
     except Exception as e:
         return None

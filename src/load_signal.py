@@ -118,7 +118,7 @@ def load_signal(filepath: Path) -> tuple[pd.DataFrame, dict]:
             data_frame['trial_number'] = data_frame.groupby('block_number')['is_trial_start'].cumsum()
         else:
             warnings.warn("Could not determine block and stimulus comments from counts. Block and trial columns will not be created.")
-
+    
     return data_frame, comment_summary
 
 # ==============================================================================
@@ -199,7 +199,7 @@ def _process_text_file(lines: list[str], file_extension: str) -> pd.DataFrame:
         comment_part = None
         
         # Split the line into data and comments based on the '#*' delimiter
-        # TODO: Handle a more genereic comment delimiter based on regex/non-numeric?
+        # TODO: Handle a more generic comment delimiter based on regex/non-numeric?
         if '#*' in line:
             parts = line.split('#*')
             line = parts[0]
