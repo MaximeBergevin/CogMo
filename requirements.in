@@ -1,7 +1,6 @@
 dash
 dash-bootstrap-components
-logging
 pandas
 pytest
 pytest-mock
-webview
+pywebview

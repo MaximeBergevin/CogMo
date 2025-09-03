@@ -31,10 +31,11 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
           
-      - name: Install dependencies
+      - name: Install and Compile Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip pip-tools
+          pip-compile requirements.in -o requirements_linux.txt
+          pip install -r requirements_linux.txt
       
       # TODO: Translate unit tests from R to python
       #- name: Run Unit Tests
