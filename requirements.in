@@ -1,6 +1,8 @@
 dash
 dash-bootstrap-components
 pandas
+pyarrow
+pyinstaller
 pytest
 pytest-mock
 pywebview

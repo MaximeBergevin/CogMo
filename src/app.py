@@ -7,23 +7,44 @@
 # ==============================================================================
 # --- IMPORTS AND APP INITIALIZATION ---
 # ==============================================================================
-import dash
-from dash import dcc, html
-import dash_bootstrap_components as dbc
-from dash.dependencies import Input, Output, State, ALL
-import io
+# Standard Library Imports
+# ----------------------------------------------------
 import base64
-from pathlib import Path
+import io
 import os
+import re
 import shutil
+import tempfile
 import threading
-import webview
+import time
+import uuid
+import warnings
+from pathlib import Path
+
+# Third-Party Dependencies
+# ----------------------------------------------------
+import dash
+import dash_bootstrap_components as dbc
 import pandas as pd
+from dash import dcc, html
+from dash.dependencies import ALL, Input, Output, State
+import webview
+# Local Application Imports
 from get_condition_lookup import get_condition_lookup
 from load_signal import load_signal
-import time
-import re
-import warnings
+
+# DEPENDENCIES FILE MANAGEMENT:
+# Requirements.in & requirements.txt (Windows & MacOS)
+# 👉requirements.in contains the main dependencies
+# 👉requirements.txt contains the OS-specific versions for deployment
+# Call those to update/freeze .txt files after adding new dependencies
+# MacOS:
+#  Update/freeze: pip-compile requirements.in -o requirements_mac.txt
+#  Install:       pip install -r requirements_mac.txt
+# Windows:
+#  Update/freeze: pip-compile requirements.in -o requirements_windows.txt
+#  Install:       pip install -r requirements_windows.txt
+# ----------------------------------------------------
 
 # Initialize the Dash app with Bootstrap theme
 app = dash.Dash(__name__,
@@ -43,6 +64,27 @@ def find_best_match(channel_names: list, patterns: list) -> str | None:
             if re.match(pattern, channel):
                 return channel
     return None
+
+# ==============================================================================
+# --- UPLOAD BUTTONS ---
+# ==============================================================================
+DEFAULT_UPLOAD_STYLE = {
+    'height' : '60px',
+    'lineHeight' : '60px',
+    'borderWidth' : '1px',
+    'borderStyle' : 'dashed',
+    'borderRadius' : '5px',
+    'textAlign' : 'center',
+}
+
+# New style for successful uploads
+SUCCESS_UPLOAD_STYLE = DEFAULT_UPLOAD_STYLE.copy()
+SUCCESS_UPLOAD_STYLE['borderColor'] = 'green'
+SUCCESS_UPLOAD_STYLE['backgroundColor'] = '#F0FFF0'
+
+# New style for failed uploads
+ERROR_UPLOAD_STYLE = DEFAULT_UPLOAD_STYLE.copy()
+ERROR_UPLOAD_STYLE['borderColor'] = 'red'
 
 # ==============================================================================
 # --- APP LAYOUT (UI) ---
@@ -77,7 +119,9 @@ app.layout = dbc.Container([
                                 dcc.Loading(
                                     id="data-upload-throbber",
                                     type="dot",
-                                    children=html.Div(id='data-upload-output-message', className="mt-3"),
+                                    children=html.Div(id='data-upload-output-message',
+                                                      className="mt-3",
+                                                      style={'min-height': '50px'}),
                                 )
                             ]),
                             width=6,
@@ -104,7 +148,9 @@ app.layout = dbc.Container([
                                 dcc.Loading(
                                     id = 'condition-upload-throbber',
                                     type = 'dot',
-                                    children = html.Div(id = 'condition-upload-output-message', className='"mt-2")')
+                                    children = html.Div(id = 'condition-upload-output-message',
+                                                         className='"mt-2")',
+                                                         style={'min-height': '50px'})
                                 )
                             ]),
                             width=6,
@@ -211,6 +257,7 @@ app.layout.children.append(dcc.Store(id = 'emg-channels-store'))
     Output('block-comments-store', 'data', allow_duplicate=True),
     Output('stimulus-comments-store', 'data', allow_duplicate=True),
     Output('data-upload-output-message', 'children', allow_duplicate=True),
+    Output('upload-signal-data', 'style', allow_duplicate=True),
     Input('upload-signal-data', 'contents'),
     State('upload-signal-data', 'filename'),
     prevent_initial_callbacks = True
@@ -234,44 +281,57 @@ def upload_signal_data_callback(signal_contents, signal_filename):
         
         # Load and process the signal data
         df, comment_summary = load_signal(temp_filepath)
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            # --- SUCCESS PATH ---
+            # Create session ID and dedicated temporary directory for app's session
+            session_id = str(uuid.uuid4())
+            app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
+            app_temp_dir.mkdir(exist_ok = True)
+            filepath = app_temp_dir / "f{session_id}.feather"
+            df.to_feather(filepath)
 
-         # Message not printed, but stored in dcc.Store linked to dcc.Loading for throbber 
-        if not df.empty and not comment_summary:
-            message = f"File uploaded but there was an issue with processing"
+            # Message not printed, but stored in dcc.Store linked to dcc.Loading for throbber 
+            if not df.empty and not comment_summary:
+                message = f"File uploaded but there was an issue with processing"
+            else:
+                message = ""
+
+            # Find the lowest block count and total stimulus count, and capture comment types
+            block_comments = []
+            stimulus_comments = []
+
+            if comment_summary:
+                for comment_type, count in comment_summary.items():
+                    comment_lower = comment_type.lower()
+                    if 'block' in comment_lower:
+                        if comment_type not in block_comments:
+                            block_comments.append(comment_type)
+                    elif 'stimulus' in comment_lower:
+                        if comment_type not in stimulus_comments:
+                            stimulus_comments.append(comment_type)
+
+            # TODO: Comment out for deployment, this is for debugging/testing purposes
+            print(f"Data's head:\n {df.head()}")
+            print(f"Session ID: {session_id}")
+            print(f"Comment's count: {comment_summary}")
+            print(f"Block comments: {block_comments}")
+            print(f"Stimulus comments: {stimulus_comments}")
+            print(message)
+
+            return session_id, block_comments, stimulus_comments, message,  SUCCESS_UPLOAD_STYLE
         else:
-            message = "Data uploaded successfully."
-
-        # Find the lowest block count and total stimulus count, and capture comment types
-        block_comments = []
-        stimulus_comments = []
-
-        if comment_summary:
-            for comment_type, count in comment_summary.items():
-                comment_lower = comment_type.lower()
-                if 'block' in comment_lower:
-                    if comment_type not in block_comments:
-                        block_comments.append(comment_type)
-                elif 'stimulus' in comment_lower:
-                    if comment_type not in stimulus_comments:
-                        stimulus_comments.append(comment_type)
-
-         # TODO: Comment out for deployment, this is for debugging/testing purposes
-        print(df.head())
-        # dcc.Store can't handle pd DataFrame. Need to convert df to dict first.
-        df = df.to_dict('records')
-        print(comment_summary)
-        print(f"Block comments: {block_comments}")
-        print(f"Stimulus comments: {stimulus_comments}")
-        print(message)
-
-        return df, block_comments, stimulus_comments, message
-
+            # --- FAILURE PATH ---
+            message = ""
+            return None, None, None, message, ERROR_UPLOAD_STYLE
+        
     except Exception as e:
         block_comments = None
         stimulus_comments = None
         df = None
+        session_id = None
+        message = f' Error processing file: {str(e)}'
 
-        return df, block_comments, stimulus_comments, message
+        return session_id, block_comments, stimulus_comments, message, ERROR_UPLOAD_STYLE
         
     finally:
         # Clean up the temporary file and directory
@@ -283,6 +343,7 @@ def upload_signal_data_callback(signal_contents, signal_filename):
 @app.callback(
         Output('condition-data-store', 'data', allow_duplicate = True),
         Output('condition-upload-output-message', 'children', allow_duplicate = True),
+        Output('upload-condition-order', 'style', allow_duplicate=True),
         Input('upload-condition-order', 'contents'),
         State('upload-condition-order', 'filename'),
         prevent_initial_callbacks = True
@@ -302,13 +363,15 @@ def upload_condition_callback(condition_contents, condition_filename):
         elif condition_filename.endswith('.csv'):
             df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
         else:
-            return None
+            return None, message, ERROR_UPLOAD_STYLE
         # Message not printed, but stored in dcc.Store linked to dcc.Loading for throbber 
-        message = f' Condition file uploaded successfully.'
-        return df.to_dict('records'), message
+        message = ""
+        # TODO: Comment out for deployment, this is for debugging/testing purposes
+        print(f"Condition file's head:\n {df.head()}")
+        return df.to_dict('records'), message, SUCCESS_UPLOAD_STYLE
     
     except Exception as e:
-        return None
+        return None, message, ERROR_UPLOAD_STYLE
 
 # 3. Callback for Baseline Reference Value Updates
 # ------------------------------------------------
