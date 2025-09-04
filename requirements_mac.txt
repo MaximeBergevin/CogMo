@@ -4,6 +4,10 @@
 #
 #    pip-compile --output-file=requirements_mac.txt requirements.in
 #
+altgraph==0.17.4
+    # via
+    #   macholib
+    #   pyinstaller
 blinker==1.9.0
     # via flask
 bottle==0.13.4
@@ -32,6 +36,8 @@ itsdangerous==2.2.0
     # via flask
 jinja2==3.1.6
     # via flask
+macholib==1.16.3
+    # via pyinstaller
 markupsafe==3.0.2
     # via
     #   flask
@@ -46,6 +52,8 @@ numpy==2.3.2
 packaging==25.0
     # via
     #   plotly
+    #   pyinstaller
+    #   pyinstaller-hooks-contrib
     #   pytest
 pandas==2.3.2
     # via -r requirements.in
@@ -55,8 +63,14 @@ pluggy==1.6.0
     # via pytest
 proxy-tools==0.1.0
     # via pywebview
+pyarrow==21.0.0
+    # via -r requirements.in
 pygments==2.19.2
     # via pytest
+pyinstaller==6.15.0
+    # via -r requirements.in
+pyinstaller-hooks-contrib==2025.8
+    # via pyinstaller
 pyobjc-core==11.1
     # via
     #   pyobjc-framework-cocoa

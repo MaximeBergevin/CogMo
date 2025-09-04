@@ -31,7 +31,7 @@ from dash.dependencies import ALL, Input, Output, State
 import webview
 # Local Application Imports
 from get_condition_lookup import get_condition_lookup
-from load_signal import load_signal
+from data_loader import load_signal, find_best_match
 
 # DEPENDENCIES FILE MANAGEMENT:
 # Requirements.in & requirements.txt (Windows & MacOS)
@@ -287,7 +287,7 @@ def upload_signal_data_callback(signal_contents, signal_filename):
             session_id = str(uuid.uuid4())
             app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
             app_temp_dir.mkdir(exist_ok = True)
-            filepath = app_temp_dir / "f{session_id}.feather"
+            filepath = app_temp_dir / f"{session_id}.feather"
             df.to_feather(filepath)
 
             # Message not printed, but stored in dcc.Store linked to dcc.Loading for throbber 
@@ -333,12 +333,110 @@ def upload_signal_data_callback(signal_contents, signal_filename):
 
         return session_id, block_comments, stimulus_comments, message, ERROR_UPLOAD_STYLE
         
-    finally:
+    #finally:
         # Clean up the temporary file and directory
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        #shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-# 2. Callback for Condition Order File Upload
+# 2. Callback for Channel Selection
+# ---------------------------------
+@app.callback(
+        Output('channel-mapping-container', 'children'),
+        Input('signal-data-store', 'data')
+)
+def update_channel_mapping_ui(session_id):
+    # --- FAILURE PATH ----
+    # guard clause in case session_id does not exist
+    if not session_id:
+        #TODO: Message to display? See what I might want to do.
+        return None
+
+    # --- HAPPY PATH ---
+    # Recreate path to temp data folder & full path, then read pd.DataFrame from feather file
+    app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
+    app_temp_dir.mkdir(exist_ok = True)
+    filepath = app_temp_dir /f"{session_id}.feather"
+    df = pd.read_feather(filepath)
+
+    # Define auto-detection patterns, based on regex keywords
+    time_patterns       = ["(?i)^time$", "(?i)^timestamp$", "(?i)^ts$", "(?i)^t$"]
+    force_right_pattern = ["(?i)^force[-_\\s]?right$", "(?i)^right[-_\\s]?force$", "(?i)^fr$", "(?i)^force\\s*\\(r\\)", "(?i)grip[-_\\s]?r"]
+    force_left_pattern  = ["(?i)^force[-_\\s]?left$", "(?i)^left[-_\\s]?force$", "(?i)^fl$", "(?i)^force\\s*\\(l\\)", "(?i)grip[-_\\s]?l"]
+    emg_right_pattern   = ["(?i)^emg[-_\\s]?right$", "(?i)^right[-_\\s]?emg$", "(?i)^emg\\s*\\(r\\)", "(?i)^er$", "(?i)fcr[-_\\s]?r$"]
+    emg_left_pattern    = ["(?i)^emg[-_\\s]?left$", "(?i)^left[-_\\s]?emg$", "(?i)^emg\\s*\\(l\\)", "(?i)^el$", "(?i)fcr[-_\\s]?l$"]
+
+    channel_names = df.columns.tolist()
+    detected_channels = {
+        'time'         : find_best_match(channel_names, time_patterns),
+        'force_right'  : find_best_match(channel_names, force_right_pattern),
+        'force_left'   : find_best_match(channel_names, force_left_pattern),
+        'emg_right'    : find_best_match(channel_names, emg_right_pattern),
+        'emg_left'     :find_best_match(channel_names, emg_left_pattern)
+    }
+    #TODO: Comment out for deployment, this is for debugging/testing purposes
+    print(f"Channel names: {channel_names}")
+
+    # Format channel names for dropwon's options' property
+    dropdown_options = [{'labels': name, 'value': name} for name in channel_names]
+    # Build layout components to return
+    ui_layout = html.Div({
+        html.H4("Channel Mapping"),
+        html.P("Review the detected channels or make a manual selection."),
+
+        dbc.Row([
+            # Column for Time Channel
+            dbc.Col([
+                dbc.Label("Time Channel:"),
+                dcc.Dropdown(
+                    id='time-channel-dropdown',
+                    options=dropdown_options,
+                    value=detected_channels['time'], # Set the default value
+                    clearable=False # A time channel is mandatory
+                )
+            ], width=6),
+            # Column for Force Right
+            dbc.Col([
+                dbc.Label("Force Right Channel:"),
+                dcc.Dropdown(
+                    id='force-right-channel-dropdown',
+                    options=dropdown_options,
+                    value=detected_channels['force_right'],
+                    clearable=False # Force channels are mandatory
+                )
+            ], width=6),
+            dbc.Col([
+                dbc.Label("Force Left Channel:"),
+                dcc.Dropdown(
+                    id='force-left-channel-dropdown',
+                    options=dropdown_options,
+                    value=detected_channels['force_left'],
+                    clearable=False # Force channels are mandatory
+                )
+            ], width=6),
+            dbc.Col([
+                dbc.Label("EMG Right Channel:"),
+                dcc.Dropdown(
+                    id='force-left-channel-dropdown',
+                    options=dropdown_options,
+                    value=detected_channels['emg_right'],
+                    clearable=False # Force channels are mandatory
+                )
+            ], width=6),
+            dbc.Col([
+                dbc.Label("EMG Left Channel:"),
+                dcc.Dropdown(
+                    id='force-left-channel-dropdown',
+                    options=dropdown_options,
+                    value=detected_channels['emg_left'],
+                    clearable=False # Force channels are mandatory
+                )
+            ], width=6)
+        ]),
+    })
+    return ui_layout
+    
+
+# 3. Callback for Condition Order File Upload
 # -------------------------------------------
 @app.callback(
         Output('condition-data-store', 'data', allow_duplicate = True),

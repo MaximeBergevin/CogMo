@@ -1,9 +1,12 @@
-import pandas as pd
+# Standard Library Imports
+# ----------------------------------------------------
 import re
-from pathlib import Path
 import warnings
+from pathlib import Path
 from typing import Optional
-import logging
+# Third-Party Dependencies
+# ----------------------------------------------------
+import pandas as pd
 
 # ==============================================================================
 # --- HELPER FUNCTION ---
@@ -32,7 +35,7 @@ def _is_data_row(line_text: str, delimiter: str = '\t') -> bool:
     return (numeric_count / len(fields)) > 0.5
 
 # ==============================================================================
-# --- MAIN FUNCTION ---
+# --- load_signal ---
 # ==============================================================================
 def load_signal(filepath: Path) -> tuple[pd.DataFrame, dict]:
     """
@@ -230,3 +233,27 @@ def _process_text_file(lines: list[str], file_extension: str) -> pd.DataFrame:
             df[col] = df[col].astype('string')
     
     return df
+
+
+# ==============================================================================
+# --- find_best_match ---
+# ==============================================================================
+def find_best_match(available_channels: list, keyword_patterns: list) -> str | None:
+    """
+    Find the best matching columns for force and EMG signals in the DataFrame.
+    Args:
+    availables_channels (list): List of available column names in the DataFrame.
+    keyword_patterns (list): List of regex patterns to match against column names.
+    Returns:
+        str | None: The best matching column name, or None if no match is found.
+    """
+    for pattern in keyword_patterns:
+        matches = [channel for channel in available_channels if re.match(pattern, channel)]
+
+        # If any matches were found, pick the shortest one
+        # e.g., pick "force_r" over "force_r_raw". Robustness comes from UI. This is a heuristic (i.e., design choice).
+        if matches:
+            best_match = min(matches, ken = len)
+            return best_match
+        
+    return None
