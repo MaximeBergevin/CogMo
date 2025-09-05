@@ -29,10 +29,15 @@ import pandas as pd
 from dash import dcc, html, no_update, ctx
 from dash.exceptions import PreventUpdate
 from dash.dependencies import ALL, Input, Output, State
+from plotly.subplots import make_subplots
+import plotly.graph_objs as go
 import webview
+
 # Local Application Imports
+#---------------------------
 from get_condition_lookup import get_condition_lookup
 from data_loader import load_signal, find_best_match
+from trial_segmentation import get_trial_segment, create_trial_lookup
 
 # DEPENDENCIES FILE MANAGEMENT:
 # Requirements.in & requirements.txt (Windows & MacOS)
@@ -52,19 +57,6 @@ app = dash.Dash(__name__,
                  external_stylesheets=[dbc.themes.MINTY],
                  prevent_initial_callbacks = True)
 
-
-# ==============================================================================
-# --- HELPER FUNCTIONS ---
-# ==============================================================================
-def find_best_match(channel_names: list, patterns: list) -> str | None:
-    """
-    Finds the first channel name that matches any of the given patterns.
-    """
-    for channel in channel_names:
-        for pattern in patterns:
-            if re.match(pattern, channel):
-                return channel
-    return None
 
 # ==============================================================================
 # --- UPLOAD BUTTONS ---
@@ -221,10 +213,48 @@ app.layout = dbc.Container([
             label="Trial Viewer",
             children=[
                 html.Div([
-                    html.H4("Content for Trial Viewer Tab"),
-                ], className="p-3")
-            ]
-        ),
+                    dbc.Row([
+                        # --- Sidebar for Controls ---
+                dbc.Col([
+                    html.H4("Trial Controls"),
+                    
+                    # Trial Navigator (Hybrid Slider + Input)
+                    dbc.Label("Select Global Trial:"),
+                    dbc.InputGroup([
+                        dbc.Input(id='trial-selector-input', type='number', value=1, min=1, step=1),
+                        dcc.Slider(
+                            id='trial-selector-slider',
+                            min=1,
+                            max=100,  # This will be updated dynamically later
+                            step=1,
+                            value=1,
+                            className="flex-grow-1 mx-2"
+                        ),
+                    ]),
+                    
+                    # Parameter Controls
+                    dbc.Label("Pre-Stimulus Window (s):", className="mt-3"),
+                    dbc.Input(id='pre-stim-window-input', type='number', value=0.125, step=0.05),
+    
+                    dbc.Label("Post-Stimulus Window (s):", className="mt-3"),
+                    dbc.Input(id='post-stim-window-input', type='number', value=1.25, step=0.05),
+                    
+                    html.Hr(),
+                    
+                    # Display area for calculated metrics
+                    html.H4("Trial Metrics"),
+                    html.Div(id='trial-metrics-display')
+                    
+                ], width=4),  # End of sidebar column
+                
+                # --- Main Area for the Graph ---
+                dbc.Col([
+                    dcc.Graph(id='trial-graph', style={'height': '80vh'})
+                ], width=8)  # End of graph column
+            ])
+        ], className="p-3") # Add some padding around the content
+    ]
+),
     ])
 ], fluid=False, style={'width': '1000px', 'overflow-x': 'hidden'})
 
@@ -604,6 +634,7 @@ def upload_condition_callback(condition_contents, condition_filename):
     except Exception as e:
         return None, message, ERROR_UPLOAD_STYLE
 
+
 # Callback for Baseline Reference Value Updates
 # ----------------------------------------------
 @app.callback(
@@ -619,6 +650,123 @@ def upload_condition_callback(condition_contents, condition_filename):
 )
 def update_reference_values(mvc_left, mvc_right, rfd_left, rfd_right):
     return mvc_left, mvc_right, rfd_left, rfd_right
+
+
+# Callback for trial segmentation
+# --------------------------------
+@app.callback(
+        Output('trial-graph', 'figure', allow_duplicate=True),
+        Output('trial-metrics-display', 'children', allow_duplicate=True),
+        Output('trial-selector-slider', 'max', allow_duplicate=True),
+        Output('trial-selector-input', 'value', allow_duplicate=True),
+        Input('trial-selector-slider', 'value'),
+        State('condition-data-store', 'data'),     # Condition
+        State('signal-data-store', 'data'),        # Session id
+        State('channel-map-store', 'data'),        # Channel Map
+        State('pre-stim-window-input', 'value'),   # Adjustable pre-stimulus window
+        State('post-stim-window-input', 'value'),  # Adjustable post-stimulus window
+        State('mvc-left-store', 'data'),           # Reference values
+        State('mvc-right-store', 'data'),          # Reference values
+        prevent_initial_callbacks=True
+    )
+def update_trial_viewer(
+    selected_trial,
+    condition_data_dict, session_id,
+    channel_map,
+    pre_window, post_window,
+    mvc_left, mvc_right
+):
+    # --- FAILURE PATH ---
+    # Guard clause: Ensure required inputs exist
+    if not all([session_id, channel_map, condition_data_dict, mvc_left, mvc_right]):
+        raise PreventUpdate
+    
+    # Recreate path to temp data folder & full path, then read pd.DataFrame from feather file
+    app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
+    app_temp_dir.mkdir(exist_ok = True)
+    print(f"Session ID in trial viewer callback: {session_id}")
+    filepath = app_temp_dir /f"{session_id}.feather"
+    df = pd.read_feather(filepath)
+
+    # Total number of trials
+    trial_lookup = create_trial_lookup(df)
+    total_trials = len(trial_lookup)
+
+    # Get condition data as pd.DataFrame
+    condition_data = pd.DataFrame(condition_data_dict)
+
+    # Segment trial based on selected trial index
+    trial_segment_df, trial_metrics = get_trial_segment(
+        full_df = df,
+        trial_lookup = trial_lookup,
+        condition_data = condition_data,
+        trial_index = selected_trial,
+        channel_map = channel_map,
+        mvc_left = mvc_left,
+        mvc_right = mvc_right,
+        pre_window = pre_window,
+        post_window = post_window
+    )
+
+    #TODO: Comment out for deployment, this is for debugging/testing purposes
+    print(f"Trial segment's head:\n {trial_segment_df.head()}")
+    print(f"Trial metrics:\n {trial_metrics}")
+
+    # Channel mapping
+    time_col = channel_map.get('time')
+    force_r_col = channel_map.get('force_right')
+    force_l_col = channel_map.get('force_left')
+    emg_r_col = channel_map.get('emg_right')
+    emg_l_col = channel_map.get('emg_left')
+    include_emg = bool(emg_r_col and emg_l_col)
+
+    # Figures
+    COLOR_R = 'blue'
+    COLOR_L = 'goldenrod'
+    max_mvc = max(mvc_left, mvc_right)
+    threshold_value = trial_metrics.get('threshold')
+
+    # --- Create Figure ---
+    if include_emg:
+        # Create a figure with 2 subplots
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05)
+        # Add force traces to the first subplot
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], 
+                                 name='Right Hand', legendgroup='right', line=dict(color=COLOR_R)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], 
+                                 name='Left Hand', legendgroup='left', line=dict(color=COLOR_L)), row=1, col=1)
+        # Add EMG traces to the second subplot
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col], 
+                                 name='EMG Right', legendgroup='right', showlegend=False, line=dict(color=COLOR_R)), row=2, col=1)
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], 
+                                 name='EMG Left', legendgroup='left', showlegend=False, line=dict(color=COLOR_L)), row=2, col=1)
+    else:
+        # FIX: Also use make_subplots for the single-plot case
+        fig = make_subplots(rows=1, cols=1)
+        # Add force traces, specifying row=1, col=1
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], 
+                                 name='Right Hand', line=dict(color=COLOR_R)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], 
+                                 name='Left Hand', line=dict(color=COLOR_L)), row=1, col=1)
+
+    # --- Apply Customizations to the Figure (this code now works for both cases) ---
+    fig.update_yaxes(title_text="Force", range=[0, max_mvc], row=1, col=1)
+
+    if include_emg:
+        fig.update_yaxes(title_text="EMG", row=2, col=1)
+
+    if threshold_value is not None:
+        fig.add_hline(y=threshold_value, line_dash="dash", line_color="grey", row=1, col=1)
+
+    fig.update_layout(title=f"Trial #{selected_trial}", margin=dict(t=30, b=0, l=0, r=0))
+
+    metrics_layout = dbc.Card(dbc.CardBody([
+        html.P(f"{key.replace('_', ' ').title()}: {value}")
+        for key, value in trial_metrics.items()
+    ]))
+
+    return fig, metrics_layout, total_trials, selected_trial
+
 
 
 # ==============================================================================

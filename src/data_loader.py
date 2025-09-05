@@ -81,46 +81,48 @@ def load_signal(filepath: Path) -> tuple[pd.DataFrame, dict]:
         # ----------------------------------------------------------
         if comment_counts.empty:
             warnings.warn("No comments found in the data, cannot create block or trial columns.")
-            return data_frame, comment_summary
-
-        # Identify block and stimulus comment types based on ascending order counts
-        sorted_comments = comment_counts.sort_values()
-        
-        # Heuristic: lowest non-zero count is the block start comment
-        block_comment_type: Optional[str] = None
-        for comment, count in sorted_comments.items():
-            if count > 1:
-                block_comment_type = comment
-                break
-        
-        # Heuristic: the stimulus comment is the first comment to appear after the first block comment
-        stimulus_comment_type: Optional[str] = None
-        if block_comment_type:
-            comments_list = data_frame['comments'].to_list()
-            try:
-                first_block_index = comments_list.index(block_comment_type)
-                for comment in comments_list[first_block_index + 1:]: # Start after the first block comment
-                    if pd.notna(comment) and comment != '': # Add a check for empty strings
-                        stimulus_comment_type = comment # Store first comment after block comment
-                        break
-            except ValueError:
-                # This should not happen if block_comment_type was found
-                pass
-
-        if block_comment_type and stimulus_comment_type:
-            # Create 'is_block_start' column (integer 1 or 0)
-            data_frame['is_block_start'] = (data_frame['comments'] == block_comment_type).astype(int)
-            
-            # Create 'block_number' column by taking a cumulative sum
-            data_frame['block_number'] = data_frame['is_block_start'].cumsum()
-
-            # Create 'is_trial_start' column (boolean True or False)
-            data_frame['is_trial_start'] = (data_frame['comments'] == stimulus_comment_type)
-
-            # Create 'trial_number' column by taking a cumultative sum within each block
-            data_frame['trial_number'] = data_frame.groupby('block_number')['is_trial_start'].cumsum()
         else:
-            warnings.warn("Could not determine block and stimulus comments from counts. Block and trial columns will not be created.")
+            # --- Heuristic to find block and stimulus markers ---
+            # Identify the block comment type (lowest frequency)
+            block_comment_type = comment_counts.sort_values().index[0]
+            
+            # Remove the block comment from the pool of candidates
+            potential_trial_comments = comment_counts.drop(block_comment_type)
+
+            # Helper to find a comment's base name
+            def get_comment_base(comment_str):
+                """Removes a direction suffix to find the base name."""
+                base = re.sub(r'[-_\s]?(left|right|l|r)$', '', comment_str, flags=re.IGNORECASE)
+                return base.strip()
+
+            # Group remaining comments by their base name
+            comment_groups = {}
+            for comment in potential_trial_comments.index:
+                base = get_comment_base(comment)
+                if base not in comment_groups:
+                    comment_groups[base] = []
+                comment_groups[base].append(comment)
+            
+            # Find the group with the highest total count
+            max_count = 0
+            stimulus_comment_types = [] # This will be a list of stimulus markers
+            for base, comments in comment_groups.items():
+                total_count = sum(potential_trial_comments[c] for c in comments)
+                if total_count > max_count:
+                    max_count = total_count
+                    stimulus_comment_types = comments
+
+            # --- Create new columns if markers were found ---
+            if block_comment_type and stimulus_comment_types:
+                # Create boolean columns for start events
+                data_frame['is_block_start'] = (data_frame['comments'] == block_comment_type)
+                data_frame['is_trial_start'] = data_frame['comments'].isin(stimulus_comment_types)
+
+                # Create number columns using cumulative sums
+                data_frame['block_number'] = data_frame['is_block_start'].cumsum()
+                data_frame['trial_number'] = data_frame.groupby('block_number')['is_trial_start'].cumsum()
+            else:
+                warnings.warn("Could not robustly determine block and stimulus comments from counts.")
     
     return data_frame, comment_summary
 
@@ -253,7 +255,7 @@ def find_best_match(available_channels: list, keyword_patterns: list) -> str | N
         # If any matches were found, pick the shortest one
         # e.g., pick "force_r" over "force_r_raw". Robustness comes from UI. This is a heuristic (i.e., design choice).
         if matches:
-            best_match = min(matches, ken = len)
+            best_match = min(matches, key = len)
             return best_match
         
     return None
