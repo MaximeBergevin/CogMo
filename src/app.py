@@ -26,7 +26,8 @@ from pathlib import Path
 import dash
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import dcc, html
+from dash import dcc, html, no_update, ctx
+from dash.exceptions import PreventUpdate
 from dash.dependencies import ALL, Input, Output, State
 import webview
 # Local Application Imports
@@ -120,8 +121,8 @@ app.layout = dbc.Container([
                                     id="data-upload-throbber",
                                     type="dot",
                                     children=html.Div(id='data-upload-output-message',
-                                                      className="mt-3",
-                                                      style={'min-height': '50px'}),
+                                                      className="mt-1",
+                                                      style={'min-height': '25px'}),
                                 )
                             ]),
                             width=6,
@@ -149,8 +150,8 @@ app.layout = dbc.Container([
                                     id = 'condition-upload-throbber',
                                     type = 'dot',
                                     children = html.Div(id = 'condition-upload-output-message',
-                                                         className='"mt-2")',
-                                                         style={'min-height': '50px'})
+                                                         className='"mt-1")',
+                                                         style={'min-height': '25px'})
                                 )
                             ]),
                             width=6,
@@ -158,10 +159,10 @@ app.layout = dbc.Container([
                     ]),
                     
                     # --- Channel Mapping Section ---
-                    html.Div(id='channel-mapping-container', className="mt-4"),
+                    html.Div(id='channel-mapping-container', className="mt-2"),
                     
                     # --- Baseline Reference values ---
-                    html.H4("Baseline Reference values", className="mt-4"),
+                    html.H4("Baseline Reference values", className="mt-3"),
                     dbc.Row([
                         dbc.Col(
                             dbc.FormFloating([
@@ -232,6 +233,7 @@ app.layout = dbc.Container([
 # ---------------------------------------------------
 app.layout.children.append(dcc.Store(id = 'signal-data-store')),
 app.layout.children.append(dcc.Store(id = 'condition-data-store')),
+app.layout.children.append(dcc.Store(id = 'channel-map-store')),
 # Comment types stored as a list of strings
 # ---------------------------------------------------
 app.layout.children.append(dcc.Store(id = 'block-comments-store'))
@@ -250,8 +252,8 @@ app.layout.children.append(dcc.Store(id = 'emg-channels-store'))
 # --- CALLBACKS (Backend Logic) ---
 # ==============================================================================
 
-# 1. Callback for Signal Data Upload
-# ----------------------------------
+# Callback for Signal Data Upload
+# --------------------------------
 @app.callback(
     Output('signal-data-store', 'data', allow_duplicate=True),
     Output('block-comments-store', 'data', allow_duplicate=True),
@@ -333,20 +335,20 @@ def upload_signal_data_callback(signal_contents, signal_filename):
 
         return session_id, block_comments, stimulus_comments, message, ERROR_UPLOAD_STYLE
         
-    #finally:
+    finally:
         # Clean up the temporary file and directory
-        #shutil.rmtree(temp_dir, ignore_errors=True)
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-# 2. Callback for Channel Selection
-# ---------------------------------
+# Callback for Channel Selection
+# ------------------------------
 @app.callback(
         Output('channel-mapping-container', 'children'),
         Input('signal-data-store', 'data')
 )
 def update_channel_mapping_ui(session_id):
     # --- FAILURE PATH ----
-    # guard clause in case session_id does not exist
+    # guard clause:  Ensure session_id exists
     if not session_id:
         #TODO: Message to display? See what I might want to do.
         return None
@@ -365,79 +367,210 @@ def update_channel_mapping_ui(session_id):
     emg_right_pattern   = ["(?i)^emg[-_\\s]?right$", "(?i)^right[-_\\s]?emg$", "(?i)^emg\\s*\\(r\\)", "(?i)^er$", "(?i)fcr[-_\\s]?r$"]
     emg_left_pattern    = ["(?i)^emg[-_\\s]?left$", "(?i)^left[-_\\s]?emg$", "(?i)^emg\\s*\\(l\\)", "(?i)^el$", "(?i)fcr[-_\\s]?l$"]
 
-    channel_names = df.columns.tolist()
+    all_channel_names = df.columns.tolist() # Get channel names from full DataFrame
+    internal_columns_to_exclude = ['comments', 'is_block_start', 'block_number', 'is_trial_start', 'trial_number']
+    selectable_channels = [
+        name for name in all_channel_names
+        if name not in internal_columns_to_exclude
+    ]
+    dropdown_options = [{'label': name, 'value' :name} for name in selectable_channels]
+
     detected_channels = {
-        'time'         : find_best_match(channel_names, time_patterns),
-        'force_right'  : find_best_match(channel_names, force_right_pattern),
-        'force_left'   : find_best_match(channel_names, force_left_pattern),
-        'emg_right'    : find_best_match(channel_names, emg_right_pattern),
-        'emg_left'     :find_best_match(channel_names, emg_left_pattern)
+        'time'         : find_best_match(selectable_channels, time_patterns),
+        'force_right'  : find_best_match(selectable_channels, force_right_pattern),
+        'force_left'   : find_best_match(selectable_channels, force_left_pattern),
+        'emg_right'    : find_best_match(selectable_channels, emg_right_pattern),
+        'emg_left'     : find_best_match(selectable_channels, emg_left_pattern)
     }
     #TODO: Comment out for deployment, this is for debugging/testing purposes
-    print(f"Channel names: {channel_names}")
+    print(f"Channel names: {selectable_channels}")
 
-    # Format channel names for dropwon's options' property
-    dropdown_options = [{'labels': name, 'value': name} for name in channel_names]
+    # Sets the initial state of the EMG checkbox based on auto-detection
+    emg_detected = bool(detected_channels['emg_right'] and detected_channels['emg_left'])
+
     # Build layout components to return
-    ui_layout = html.Div({
-        html.H4("Channel Mapping"),
-        html.P("Review the detected channels or make a manual selection."),
-
-        dbc.Row([
-            # Column for Time Channel
-            dbc.Col([
-                dbc.Label("Time Channel:"),
-                dcc.Dropdown(
-                    id='time-channel-dropdown',
-                    options=dropdown_options,
-                    value=detected_channels['time'], # Set the default value
-                    clearable=False # A time channel is mandatory
-                )
-            ], width=6),
-            # Column for Force Right
-            dbc.Col([
-                dbc.Label("Force Right Channel:"),
-                dcc.Dropdown(
-                    id='force-right-channel-dropdown',
-                    options=dropdown_options,
-                    value=detected_channels['force_right'],
-                    clearable=False # Force channels are mandatory
-                )
-            ], width=6),
-            dbc.Col([
-                dbc.Label("Force Left Channel:"),
-                dcc.Dropdown(
-                    id='force-left-channel-dropdown',
-                    options=dropdown_options,
-                    value=detected_channels['force_left'],
-                    clearable=False # Force channels are mandatory
-                )
-            ], width=6),
-            dbc.Col([
-                dbc.Label("EMG Right Channel:"),
-                dcc.Dropdown(
-                    id='force-left-channel-dropdown',
-                    options=dropdown_options,
-                    value=detected_channels['emg_right'],
-                    clearable=False # Force channels are mandatory
-                )
-            ], width=6),
-            dbc.Col([
-                dbc.Label("EMG Left Channel:"),
-                dcc.Dropdown(
-                    id='force-left-channel-dropdown',
-                    options=dropdown_options,
-                    value=detected_channels['emg_left'],
-                    clearable=False # Force channels are mandatory
-                )
-            ], width=6)
-        ]),
-    })
-    return ui_layout
+    ui_layout = html.Div([
+    html.H4("Channel Mapping"),
+    html.P("Review the detected channels or make a manual selection."),
     
+    # --- Row 1 : Time channel ---
+    dbc.Row([
+        dbc.Col([
+            html.H5("Time Channel"),
+            dcc.Dropdown(
+                id='time-channel-dropdown',
+                options=dropdown_options,
+                value=detected_channels['time'],
+                clearable=False
+            )
+        ], width=6)
+    ], className="mt-2"),
+    
+    # --- Row 2: Force Channels ---
+    dbc.Row([
+        dbc.Col(html.H5("Force Channels"), width=12),
+        dbc.Col([
+            dbc.Label("Force Right Channel:"),
+            dcc.Dropdown(
+                id='force-right-channel-dropdown',
+                options=dropdown_options,
+                value=detected_channels['force_right'],
+                clearable=False
+            )
+        ], width=6),
+        dbc.Col([
+            dbc.Label("Force Left Channel:"),
+            dcc.Dropdown(
+                id='force-left-channel-dropdown',
+                options=dropdown_options,
+                value=detected_channels['force_left'],
+                clearable=False
+            )
+        ], width=6)
+    ], className="mt-2"),
+    
+    # --- Row 3: EMG Channels ---
+    dbc.Row([
+        dbc.Col(html.H5("EMG Channels"), width=12),
+        dbc.Col(
+            dbc.Checkbox(
+                id='include-emg-checkbox',
+                label="File includes EMG channels",
+                value=emg_detected, # Sets the initial state
+            ),
+            width=12,
+        ),
+        html.Div(
+            id='emg-dropdown-container',
+            children=[
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Label("EMG Right Channel:"),
+                        dcc.Dropdown(
+                            id='emg-right-channel-dropdown',
+                            options=dropdown_options,
+                            value=detected_channels['emg_right'],
+                            clearable=True
+                        )
+                    ], width=6),
+                    dbc.Col([
+                        dbc.Label("EMG Left Channel:"),
+                        dcc.Dropdown(
+                            id='emg-left-channel-dropdown',
+                            options=dropdown_options,
+                            value=detected_channels['emg_left'],
+                            clearable=True
+                        )
+                    ], width=6)
+                ])
+            ],
+            style={'display': 'block' if emg_detected else 'none'}
+        )
+    ], className="mt-2")
+    ])
+       
+    return ui_layout
 
-# 3. Callback for Condition Order File Upload
-# -------------------------------------------
+
+# Callback to control visibility of EMG Channel Dropdowns
+# --------------------------------------------------------
+@app.callback(
+        Output('emg-dropdown-container', 'style'),
+        Input('include-emg-checkbox', 'value')
+)
+def toggle_emg_visibility(is_checked):
+    if is_checked:
+        return {'display': 'block'} # Shown dropdowns
+    else:
+        return {'display': 'none'} # Hide dropdowns
+
+
+# Callback to control channel name storage
+# -----------------------------------------
+@app.callback(
+        Output('channel-map-store', 'data', allow_duplicate=True),
+        Input('time-channel-dropdown', 'value'),
+        Input('force-right-channel-dropdown', 'value'),
+        Input('force-left-channel-dropdown', 'value'),
+        Input('emg-right-channel-dropdown', 'value'),
+        Input('emg-left-channel-dropdown', 'value'),
+        prevent_initial_call=True
+)
+def save_channel_mapping(time_col, fr_col, fl_col, er_col, el_col):
+    # Guard clause: Ensure required channels are selected
+    if not all([time_col, fr_col, fl_col]):
+        raise PreventUpdate
+    
+    # It's inefficient to rewrite the entire dataFrame everytime we make a change to the dropdown menu
+    # Better to store a channel mapping as a dict, and use that to reference the correct columns in the DataFrame
+    channel_map = {
+        'time' :time_col,
+        'force_right' : fr_col,
+        'force_left' : fl_col,
+        'emg_right' : er_col,
+        'emg_left' : el_col
+    }
+
+    #TODO: Comment out for deployment, this is for debugging/testing purposes
+    print(f"Channel mapping updated:\n {channel_map}")
+
+    return channel_map
+
+
+# Callback to prevent channel duplicates
+# ---------------------------------------
+@app.callback(
+    Output('time-channel-dropdown', 'value', allow_duplicate=True),
+    Output('force-right-channel-dropdown', 'value', allow_duplicate=True),
+    Output('force-left-channel-dropdown', 'value', allow_duplicate=True),
+    Output('emg-right-channel-dropdown', 'value', allow_duplicate=True),
+    Output('emg-left-channel-dropdown', 'value', allow_duplicate=True),
+    Input('time-channel-dropdown', 'value'),
+    Input('force-right-channel-dropdown', 'value'),
+    Input('force-left-channel-dropdown', 'value'),
+    Input('emg-right-channel-dropdown', 'value'),
+    Input('emg-left-channel-dropdown', 'value'),
+    prevent_initial_call=True  
+)
+def prevent_duplicate_channels (time_val, fr_val, fl_val, er_val, el_val):
+    trigger_id = ctx.triggered_id
+    if not trigger_id:
+        raise PreventUpdate
+    
+    all_values = {
+        'time-channel-dropdown': time_val,
+        'force-right-channel-dropdown': fr_val,
+        'force-left-channel-dropdown': fl_val,
+        'emg-right-channel-dropdown': er_val,
+        'emg-left-channel-dropdown': el_val   
+    }
+    newly_selected_value = all_values[trigger_id]
+
+    output_values = { # Assume nothing will change (no_update)
+        'time-channel-dropdown': no_update,
+        'force-right-channel-dropdown': no_update,
+        'force-left-channel-dropdown': no_update,
+        'emg-right-channel-dropdown': no_update,
+        'emg-left-channel-dropdown': no_update
+    }
+    
+    for dropdown_id, value in all_values.items():
+        # Check every dropdown except the one that was just changed
+        if dropdown_id != trigger_id:
+            if value == newly_selected_value: # → Duplicate found, Reset old dropdown value to None
+                output_values[dropdown_id] = None
+
+    return (
+        output_values['time-channel-dropdown'],
+        output_values['force-right-channel-dropdown'],
+        output_values['force-left-channel-dropdown'],
+        output_values['emg-right-channel-dropdown'],
+        output_values['emg-left-channel-dropdown']
+    )
+
+
+# Callback for Condition Order File Upload
+# -----------------------------------------
 @app.callback(
         Output('condition-data-store', 'data', allow_duplicate = True),
         Output('condition-upload-output-message', 'children', allow_duplicate = True),
@@ -471,8 +604,8 @@ def upload_condition_callback(condition_contents, condition_filename):
     except Exception as e:
         return None, message, ERROR_UPLOAD_STYLE
 
-# 3. Callback for Baseline Reference Value Updates
-# ------------------------------------------------
+# Callback for Baseline Reference Value Updates
+# ----------------------------------------------
 @app.callback(
     Output('mvc-left-store', 'data', allow_duplicate=True),
     Output('mvc-right-store', 'data', allow_duplicate=True),
