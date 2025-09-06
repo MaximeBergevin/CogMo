@@ -142,7 +142,7 @@ app.layout = dbc.Container([
                                     id = 'condition-upload-throbber',
                                     type = 'dot',
                                     children = html.Div(id = 'condition-upload-output-message',
-                                                         className='"mt-1")',
+                                                         className='mt-1',
                                                          style={'min-height': '25px'})
                                 )
                             ]),
@@ -210,28 +210,22 @@ app.layout = dbc.Container([
         ),
         # Fourth Tab: Trial Viewer
         dbc.Tab(
-            label="Trial Viewer",
-            children=[
-                html.Div([
-                    dbc.Row([
-                        # --- Sidebar for Controls ---
+    label="Trial Viewer",
+    children=[
+        html.Div([
+            dbc.Row([
                 dbc.Col([
-                    html.H4("Trial Controls"),
-                    
-                    # Trial Navigator (Hybrid Slider + Input)
-                    dbc.Label("Select Global Trial:"),
-                    dbc.InputGroup([
-                        dbc.Input(id='trial-selector-input', type='number', value=1, min=1, step=1),
-                        dcc.Slider(
-                            id='trial-selector-slider',
-                            min=1,
-                            max=100,  # This will be updated dynamically later
-                            step=1,
-                            value=1,
-                            className="flex-grow-1 mx-2"
-                        ),
+                    html.H4("Trial Controls", className="mt-3"),
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label("Select Block:"),
+                            dcc.Dropdown(id='block-selector-dropdown')
+                        ], width=6),
+                        dbc.Col([
+                            dbc.Label("Select Trial:"),
+                            dcc.Dropdown(id='trial-selector-dropdown')
+                        ], width=6)
                     ]),
-                    
                     # Parameter Controls
                     dbc.Label("Pre-Stimulus Window (s):", className="mt-3"),
                     dbc.Input(id='pre-stim-window-input', type='number', value=0.125, step=0.05),
@@ -241,10 +235,10 @@ app.layout = dbc.Container([
                     
                     html.Hr(),
                     
+                    
                     # Display area for calculated metrics
                     html.H4("Trial Metrics"),
-                    html.Div(id='trial-metrics-display')
-                    
+                    html.Div(id='trial-metrics-display'),                 
                 ], width=4),  # End of sidebar column
                 
                 # --- Main Area for the Graph ---
@@ -252,7 +246,7 @@ app.layout = dbc.Container([
                     dcc.Graph(id='trial-graph', style={'height': '80vh'})
                 ], width=8)  # End of graph column
             ])
-        ], className="p-3") # Add some padding around the content
+        ], className="p-3")
     ]
 ),
     ])
@@ -264,6 +258,7 @@ app.layout = dbc.Container([
 app.layout.children.append(dcc.Store(id = 'signal-data-store')),
 app.layout.children.append(dcc.Store(id = 'condition-data-store')),
 app.layout.children.append(dcc.Store(id = 'channel-map-store')),
+app.layout.children.append(dcc.Store(id = 'trial-lookup-store')),
 # Comment types stored as a list of strings
 # ---------------------------------------------------
 app.layout.children.append(dcc.Store(id = 'block-comments-store'))
@@ -276,6 +271,9 @@ app.layout.children.append(dcc.Store(id = 'rfd-left-store'))
 app.layout.children.append(dcc.Store(id = 'rfd-right-store'))
 app.layout.children.append(dcc.Store(id = 'force-channels-store'))
 app.layout.children.append(dcc.Store(id = 'emg-channels-store'))
+# Navigation system
+# ---------------------------------------------------
+app.layout.children.append(dcc.Store(id = 'ui-generator-signal-store'))
 
 
 # ==============================================================================
@@ -374,6 +372,7 @@ def upload_signal_data_callback(signal_contents, signal_filename):
 # ------------------------------
 @app.callback(
         Output('channel-mapping-container', 'children'),
+        Output('ui-generator-signal-store', 'data'),
         Input('signal-data-store', 'data')
 )
 def update_channel_mapping_ui(session_id):
@@ -498,8 +497,8 @@ def update_channel_mapping_ui(session_id):
         )
     ], className="mt-2")
     ])
-       
-    return ui_layout
+
+    return ui_layout, time.time() # return current time as a dummy data to trigger the store update
 
 
 # Callback to control visibility of EMG Channel Dropdowns
@@ -638,10 +637,10 @@ def upload_condition_callback(condition_contents, condition_filename):
 # Callback for Baseline Reference Value Updates
 # ----------------------------------------------
 @app.callback(
-    Output('mvc-left-store', 'data', allow_duplicate=True),
-    Output('mvc-right-store', 'data', allow_duplicate=True),
-    Output('rfd-left-store', 'data', allow_duplicate=True),
-    Output('rfd-right-store', 'data', allow_duplicate=True),
+    Output('mvc-left-store', 'data'),
+    Output('mvc-right-store', 'data'),
+    Output('rfd-left-store', 'data'),
+    Output('rfd-right-store', 'data'),
     Input('input-mvc-left', 'value'),
     Input('input-mvc-right', 'value'),
     Input('input-rfd-left', 'value'),
@@ -652,34 +651,104 @@ def update_reference_values(mvc_left, mvc_right, rfd_left, rfd_right):
     return mvc_left, mvc_right, rfd_left, rfd_right
 
 
+# Callback for block navigation
+# ------------------------------
+@app.callback(
+    Output('block-selector-dropdown', 'options'),
+    Output('block-selector-dropdown', 'value'),
+    Output('trial-lookup-store', 'data'),
+    Input('ui-generator-signal-store', 'data'),
+    State('signal-data-store', 'data')
+)
+def update_block_dropdown(signal, session_id):
+    # --- FAILURE PATH ---
+    # Guard clause: Ensure required inputs exist
+    if not signal:
+        raise PreventUpdate
+    
+    # Load data from temp feather file
+    app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
+    app_temp_dir.mkdir(exist_ok = True)
+    filepath = app_temp_dir /f"{session_id}.feather"
+    df = pd.read_feather(filepath)
+
+    # Create lookup table to fetch block numbers
+    trial_lookup = create_trial_lookup(df)
+    if trial_lookup is None or trial_lookup.empty:
+        print("Trial lookup table is empty or could not be created.")
+        return [], None, None # Clears the dropdown if inputs are missing
+    
+    blocks = sorted(trial_lookup['block_number'].unique())
+    block_options = [{'label': f'Block {b}', 'value': b} for b in blocks]
+    default_block = blocks[0] if blocks else None
+
+    #TODO: Comment out for deployment, this is for debugging/testing purposes
+    print(f"Available blocks: {blocks}")
+
+    return block_options, default_block, trial_lookup.to_dict('records')
+
+
+# Callback for trial navigation
+# ------------------------------
+@app.callback(
+    Output('trial-selector-dropdown', 'options'),
+    Output('trial-selector-dropdown', 'value'),
+    Input('block-selector-dropdown', 'value'),
+    State('trial-lookup-store', 'data')
+)
+def update_trial_dropdown(selected_block, trial_lookup_dict):
+    # --- FAILURE PATH ---
+    # Guard clause: Ensure required inputs exist
+    if not all([selected_block]):
+        return [], None
+    
+    # Load data from temp feather file
+    trial_lookup = pd.DataFrame(trial_lookup_dict)
+    trials_in_block = sorted(trial_lookup[trial_lookup['block_number'] == selected_block]['trial_number'].unique())
+
+    trial_options = [{'label': f'Trial {t}', 'value': t} for t in trials_in_block]
+    default_trials = trials_in_block[0] if trials_in_block else None
+
+    #TODO: Comment out for deployment, this is for debugging/testing purposes
+    print(f"Available trials in block {selected_block}: {trials_in_block}")
+
+    return trial_options, default_trials
+
+
 # Callback for trial segmentation
 # --------------------------------
 @app.callback(
-        Output('trial-graph', 'figure', allow_duplicate=True),
-        Output('trial-metrics-display', 'children', allow_duplicate=True),
-        Output('trial-selector-slider', 'max', allow_duplicate=True),
-        Output('trial-selector-input', 'value', allow_duplicate=True),
-        Input('trial-selector-slider', 'value'),
+        Output('trial-graph', 'figure'),
+        Output('trial-metrics-display', 'children'),
+        # ---
+        Input('block-selector-dropdown', 'value'), # Selected Block
+        Input('trial-selector-dropdown', 'value'), # Selected Trial
+        # ---
         State('condition-data-store', 'data'),     # Condition
         State('signal-data-store', 'data'),        # Session id
         State('channel-map-store', 'data'),        # Channel Map
+        State('trial-lookup-store', 'data'),       # Trial Lookup Table
         State('pre-stim-window-input', 'value'),   # Adjustable pre-stimulus window
         State('post-stim-window-input', 'value'),  # Adjustable post-stimulus window
         State('mvc-left-store', 'data'),           # Reference values
-        State('mvc-right-store', 'data'),          # Reference values
-        prevent_initial_callbacks=True
+        State('mvc-right-store', 'data')           # Reference values
     )
 def update_trial_viewer(
-    selected_trial,
-    condition_data_dict, session_id,
-    channel_map,
+    selected_block, selected_trial,
+    condition_data_dict, session_id, channel_map, trial_lookup_dict,
     pre_window, post_window,
     mvc_left, mvc_right
 ):
     # --- FAILURE PATH ---
     # Guard clause: Ensure required inputs exist
-    if not all([session_id, channel_map, condition_data_dict, mvc_left, mvc_right]):
+    if not all([session_id, channel_map, condition_data_dict, mvc_left, mvc_right, trial_lookup_dict]):
         raise PreventUpdate
+    
+    # Defaults for block/trial if none selected
+    if selected_block is None:
+        selected_block = 1
+    if selected_trial is None:
+        selected_trial = 1
     
     # Recreate path to temp data folder & full path, then read pd.DataFrame from feather file
     app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
@@ -688,9 +757,16 @@ def update_trial_viewer(
     filepath = app_temp_dir /f"{session_id}.feather"
     df = pd.read_feather(filepath)
 
-    # Total number of trials
-    trial_lookup = create_trial_lookup(df)
-    total_trials = len(trial_lookup)
+    # Convert lookup dict to pd.DataFrame
+    trial_lookup = pd.DataFrame(trial_lookup_dict)
+    # Convert block/trials to global index
+    matching_trials = trial_lookup.query(
+        f"block_number == @selected_block and trial_number == @selected_trial"
+    )
+    if matching_trials.empty:
+        raise PreventUpdate
+    global_index_to_use = matching_trials['global_index'].iloc[0]
+    
 
     # Get condition data as pd.DataFrame
     condition_data = pd.DataFrame(condition_data_dict)
@@ -700,7 +776,7 @@ def update_trial_viewer(
         full_df = df,
         trial_lookup = trial_lookup,
         condition_data = condition_data,
-        trial_index = selected_trial,
+        trial_index = global_index_to_use,
         channel_map = channel_map,
         mvc_left = mvc_left,
         mvc_right = mvc_right,
@@ -709,6 +785,7 @@ def update_trial_viewer(
     )
 
     #TODO: Comment out for deployment, this is for debugging/testing purposes
+    print(f"Blocks: {selected_block}, Trial: {selected_trial}", f"(Global index: {global_index_to_use})")
     print(f"Trial segment's head:\n {trial_segment_df.head()}")
     print(f"Trial metrics:\n {trial_metrics}")
 
@@ -764,9 +841,8 @@ def update_trial_viewer(
         html.P(f"{key.replace('_', ' ').title()}: {value}")
         for key, value in trial_metrics.items()
     ]))
-
-    return fig, metrics_layout, total_trials, selected_trial
-
+    
+    return fig, metrics_layout
 
 
 # ==============================================================================
@@ -776,6 +852,12 @@ def run_app_server():
     # Note: debug=False is important for packaged apps
     app.run(debug=False) 
 
+def on_closing():
+    # Clean up temporary files and directories when the app is closed
+    app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
+    if app_temp_dir.exists():
+        shutil.rmtree(app_temp_dir, ignore_errors=True)
+
 if __name__ == '__main__':
     # Run the Dash server in a separate thread
     server_thread = threading.Thread(target=run_app_server)
@@ -783,10 +865,13 @@ if __name__ == '__main__':
     server_thread.start()
 
     # Create and start the pywebview window
-    webview.create_window(
+    window = webview.create_window(
         'CogMo Toolkit', 
         'http://127.0.0.1:8050/',
         width=1000,
         height=750
     )
+
+    window.events.closing += on_closing
+
     webview.start()
