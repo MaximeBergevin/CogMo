@@ -694,85 +694,92 @@ def update_block_dropdown(signal, session_id):
 
     return block_options, default_block, trial_lookup.to_dict('records')
 
-
 # Callback for trial navigation
 # ------------------------------
 @app.callback(
     Output('trial-selector-dropdown', 'options'),
     Output('trial-selector-dropdown', 'value'),
-    Input('block-selector-dropdown', 'value'),
-    State('trial-lookup-store', 'data')
-)
-def update_trial_dropdown(selected_block, trial_lookup_dict):
-    # --- FAILURE PATH ---
-    # Guard clause: Ensure required inputs exist
-    if not all([selected_block]):
-        return [], None
-    
-    # Load data from temp feather file
-    trial_lookup = pd.DataFrame(trial_lookup_dict)
-    trials_in_block = sorted(trial_lookup[trial_lookup['block_number'] == selected_block]['trial_number'].unique())
-
-    trial_options = [{'label': f'Trial {t}', 'value': t} for t in trials_in_block]
-    default_trials = trials_in_block[0] if trials_in_block else None
-
-    #TODO: Comment out for deployment, this is for debugging/testing purposes
-    print(f"Available trials in block {selected_block}: {trials_in_block}")
-
-    return trial_options, default_trials
-
-
-# Callback for previous/next trial buttons
-# -----------------------------------------
-@app.callback(
     Output('block-selector-dropdown', 'value', allow_duplicate=True),
-    Output('trial-selector-dropdown', 'value', allow_duplicate=True),
+    Input('block-selector-dropdown', 'value'),
     Input('prev-trial-button', 'n_clicks'),
     Input('next-trial-button', 'n_clicks'),
-    State('block-selector-dropdown', 'value'),
     State('trial-selector-dropdown', 'value'),
     State('trial-lookup-store', 'data'),
     prevent_initial_call=True
 )
-def navigate_trials(prev_clicks, next_clicks, current_block, current_trial, trial_lookup_data):
+def handle_trial_navigation(
+    selected_block, prev_clicks, next_clicks, 
+    current_trial, trial_lookup_data
+):
     triggered_id = ctx.triggered_id
-    if not triggered_id or not all([current_block, current_trial, trial_lookup_data]):
+    if not triggered_id or not trial_lookup_data:
         raise PreventUpdate
 
     trial_lookup = pd.DataFrame(trial_lookup_data)
 
-    try:
-        current_row = trial_lookup.query(
-            f"block_number == @current_block and trial_number == @current_trial"
-        )
-        current_global_index = current_row['global_index'].iloc[0]
-
-        if triggered_id == 'next-trial-button':
-            target_global_index = current_global_index + 1
-        else: # 'prev-trial-button'
-            target_global_index = current_global_index - 1
-            
-        new_row = trial_lookup.query(f"global_index == @target_global_index")
+    # --- BRANCH 1: User manually changes the block dropdown ---
+    if triggered_id == 'block-selector-dropdown':
+        if not selected_block:
+            return [], None, no_update
         
-        if not new_row.empty:
+        # Standard behavior: populate trials and reset to the first one
+        trials_in_block = sorted(
+            trial_lookup[trial_lookup['block_number'] == selected_block]['trial_number'].unique()
+        )
+        trial_options = [{'label': f'Trial {t}', 'value': t} for t in trials_in_block]
+        default_trial = trials_in_block[0] if trials_in_block else None
+        
+        # Don't update the block dropdown, as it was the trigger
+        return trial_options, default_trial, no_update
+
+    # --- BRANCH 2: User clicks a navigation button ---
+    if triggered_id in ['prev-trial-button', 'next-trial-button']:
+        if not selected_block or not current_trial:
+            raise PreventUpdate
+
+        # Get the min and max global indices for circular navigation (for circular navigation)
+        min_global_index = trial_lookup['global_index'].min()
+        max_global_index = trial_lookup['global_index'].max()
+
+        try:
+            current_row = trial_lookup.query(
+                f"block_number == @selected_block and trial_number == @current_trial"
+            )
+            current_global_index = current_row['global_index'].iloc[0]
+
+            # Determine the target index
+            if triggered_id == 'next-trial-button':
+                target_global_index = current_global_index + 1
+            else: # 'prev-trial-button'
+                target_global_index = current_global_index - 1
+
+            # Implement circular navigation
+            if target_global_index > max_global_index:
+                target_global_index = min_global_index
+            elif target_global_index < min_global_index:
+                target_global_index = max_global_index
+            
+            # Find the new trial's info
+            new_row = trial_lookup.query(f"global_index == @target_global_index")
             new_block = int(new_row['block_number'].iloc[0])
             new_trial = int(new_row['trial_number'].iloc[0])
 
-            # --- THE CRITICAL LOGIC IS HERE ---
-            # If we are staying in the same block, only update the trial dropdown.
-            # Do NOT touch the block dropdown, to prevent the chain reaction.
-            if new_block == current_block:
-                return no_update, new_trial
-            # If the block IS changing, update both.
+            # If the block has changed, also update the trial options
+            if new_block != selected_block:
+                trials_in_new_block = sorted(
+                    trial_lookup[trial_lookup['block_number'] == new_block]['trial_number'].unique()
+                )
+                new_options = [{'label': f'Trial {t}', 'value': t} for t in trials_in_new_block]
+                return new_options, new_trial, new_block
             else:
-                return new_block, new_trial
+                # If block is the same, only update the trial value
+                return no_update, new_trial, no_update
 
-    except (IndexError, KeyError):
-        # This catches any errors if the lookup fails
-        raise PreventUpdate
+        except (IndexError, KeyError):
+            raise PreventUpdate
 
-    # If at the beginning/end, do nothing
-    return no_update, no_update
+    # Default case
+    return no_update, no_update, no_update
 
 
 # Callback for trial segmentation
