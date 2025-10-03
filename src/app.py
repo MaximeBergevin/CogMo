@@ -54,7 +54,7 @@ from trial_segmentation import get_trial_segment, create_trial_lookup
 
 # Initialize the Dash app with Bootstrap theme
 app = dash.Dash(__name__,
-                 external_stylesheets=[dbc.themes.MINTY],
+                 external_stylesheets=[dbc.themes.MINTY, dbc.icons.FONT_AWESOME],
                  prevent_initial_callbacks = True)
 
 
@@ -190,15 +190,6 @@ app.layout = dbc.Container([
                 ], className="p-3")
             ]
         ),
-        # Second Tab: Baseline Noise
-        dbc.Tab(
-            label="Baseline Noise",
-            children=[
-                html.Div([
-                    html.H4("Content for Baseline Noise Tab"),
-                ], className="p-3")
-            ]
-        ),
         # Third Tab: Analyses Option
         dbc.Tab(
             label="Analyses Option",
@@ -223,7 +214,23 @@ app.layout = dbc.Container([
                         ], width=6),
                         dbc.Col([
                             dbc.Label("Select Trial:"),
-                            dcc.Dropdown(id='trial-selector-dropdown')
+                            dbc.InputGroup([
+                    dbc.Button(
+                        html.I(className="fas fa-chevron-left"), # Left arrow icon
+                        id='prev-trial-button',
+                        n_clicks=0,
+                        color="secondary",
+                        outline=True
+                    ),
+                    dcc.Dropdown(id='trial-selector-dropdown', style={'flex': '1'}), # Added flex style to fill space
+                    dbc.Button(
+                        html.I(className="fas fa-chevron-right"), # Right arrow icon
+                        id='next-trial-button',
+                        n_clicks=0,
+                        color="secondary",
+                        outline=True
+                    )
+                ])
                         ], width=6)
                     ]),
                     # Parameter Controls
@@ -715,6 +722,59 @@ def update_trial_dropdown(selected_block, trial_lookup_dict):
     return trial_options, default_trials
 
 
+# Callback for previous/next trial buttons
+# -----------------------------------------
+@app.callback(
+    Output('block-selector-dropdown', 'value', allow_duplicate=True),
+    Output('trial-selector-dropdown', 'value', allow_duplicate=True),
+    Input('prev-trial-button', 'n_clicks'),
+    Input('next-trial-button', 'n_clicks'),
+    State('block-selector-dropdown', 'value'),
+    State('trial-selector-dropdown', 'value'),
+    State('trial-lookup-store', 'data'),
+    prevent_initial_call=True
+)
+def navigate_trials(prev_clicks, next_clicks, current_block, current_trial, trial_lookup_data):
+    triggered_id = ctx.triggered_id
+    if not triggered_id or not all([current_block, current_trial, trial_lookup_data]):
+        raise PreventUpdate
+
+    trial_lookup = pd.DataFrame(trial_lookup_data)
+
+    try:
+        current_row = trial_lookup.query(
+            f"block_number == @current_block and trial_number == @current_trial"
+        )
+        current_global_index = current_row['global_index'].iloc[0]
+
+        if triggered_id == 'next-trial-button':
+            target_global_index = current_global_index + 1
+        else: # 'prev-trial-button'
+            target_global_index = current_global_index - 1
+            
+        new_row = trial_lookup.query(f"global_index == @target_global_index")
+        
+        if not new_row.empty:
+            new_block = int(new_row['block_number'].iloc[0])
+            new_trial = int(new_row['trial_number'].iloc[0])
+
+            # --- THE CRITICAL LOGIC IS HERE ---
+            # If we are staying in the same block, only update the trial dropdown.
+            # Do NOT touch the block dropdown, to prevent the chain reaction.
+            if new_block == current_block:
+                return no_update, new_trial
+            # If the block IS changing, update both.
+            else:
+                return new_block, new_trial
+
+    except (IndexError, KeyError):
+        # This catches any errors if the lookup fails
+        raise PreventUpdate
+
+    # If at the beginning/end, do nothing
+    return no_update, no_update
+
+
 # Callback for trial segmentation
 # --------------------------------
 @app.callback(
@@ -814,9 +874,9 @@ def update_trial_viewer(
                                  name='Left Hand', legendgroup='left', line=dict(color=COLOR_L)), row=1, col=1)
         # Add EMG traces to the second subplot
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col], 
-                                 name='EMG Right', legendgroup='right', showlegend=False, line=dict(color=COLOR_R)), row=2, col=1)
+                                 name='EMG Right', legendgroup='right', showlegend=False, line=dict(color=COLOR_R, width = 0.5)), row=2, col=1)
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], 
-                                 name='EMG Left', legendgroup='left', showlegend=False, line=dict(color=COLOR_L)), row=2, col=1)
+                                 name='EMG Left', legendgroup='left', showlegend=False, line=dict(color=COLOR_L, width = 0.5)), row=2, col=1)
     else:
         # FIX: Also use make_subplots for the single-plot case
         fig = make_subplots(rows=1, cols=1)
