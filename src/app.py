@@ -37,7 +37,7 @@ import webview
 #---------------------------
 from get_condition_lookup import get_condition_lookup
 from data_loader import load_signal, find_best_match
-from trial_segmentation import get_trial_data_and_metrics, create_trial_lookup
+from trial_segmentation import get_trial_data_and_metrics, get_trial_segment, create_trial_lookup
 
 # DEPENDENCIES FILE MANAGEMENT:
 # Requirements.in & requirements.txt (Windows & MacOS)
@@ -78,6 +78,54 @@ SUCCESS_UPLOAD_STYLE['backgroundColor'] = '#F0FFF0'
 # New style for failed uploads
 ERROR_UPLOAD_STYLE = DEFAULT_UPLOAD_STYLE.copy()
 ERROR_UPLOAD_STYLE['borderColor'] = 'red'
+
+# ==============================================================================
+# --- HELPER FUNCTIONS ---
+# ==============================================================================
+
+def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, trial_metrics):
+    """Creates the Plotly figure for the trial viewer."""
+    time_col = channel_map.get('time')
+    force_r_col = channel_map.get('force_right')
+    force_l_col = channel_map.get('force_left')
+    emg_r_col = channel_map.get('emg_right')
+    emg_l_col = channel_map.get('emg_left')
+    include_emg = bool(emg_r_col and emg_l_col)
+
+    COLOR_R = 'blue'
+    COLOR_L = 'goldenrod'
+    max_mvc = max(mvc_left, mvc_right)
+    threshold_value = trial_metrics.get('threshold')
+    selected_trial = trial_metrics.get('block_trial_str', 'Trial') # A default title
+
+    if include_emg:
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05)
+        # Force Traces
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], 
+                                name='Right Hand', legendgroup='right', line=dict(color=COLOR_R)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], 
+                                name='Left Hand', legendgroup='left', line=dict(color=COLOR_L)), row=1, col=1)
+        # EMG Traces
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col], 
+                                name='EMG Right', legendgroup='right', showlegend=False, line=dict(color=COLOR_R)), row=2, col=1)
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], 
+                                name='EMG Left', legendgroup='left', showlegend=False, line=dict(color=COLOR_L)), row=2, col=1)
+        fig.update_yaxes(title_text="EMG", row=2, col=1)
+    else:
+        fig = make_subplots(rows=1, cols=1)
+        # Force Traces
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], 
+                                name='Right Hand', line=dict(color=COLOR_R)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], 
+                                name='Left Hand', line=dict(color=COLOR_L)), row=1, col=1)
+
+    fig.update_yaxes(title_text="Force", range=[0, max_mvc], row=1, col=1)
+    if threshold_value is not None:
+        fig.add_hline(y=threshold_value, line_dash="dash", line_color="grey", row=1, col=1)
+    
+    fig.update_layout(title=selected_trial, margin=dict(t=30, b=0, l=0, r=0))
+    
+    return fig
 
 # ==============================================================================
 # --- APP LAYOUT (UI) ---
@@ -281,6 +329,8 @@ app.layout.children.append(dcc.Store(id = 'emg-channels-store'))
 # Navigation system
 # ---------------------------------------------------
 app.layout.children.append(dcc.Store(id = 'ui-generator-signal-store'))
+app.layout.children.append(dcc.Store(id = 'current-stim-time-store'))
+app.layout.children.append(dcc.Store(id = 'current-trial-metrics-store'))
 
 
 # ==============================================================================
@@ -782,134 +832,122 @@ def handle_trial_navigation(
     return no_update, no_update, no_update
 
 
-# Callback for trial segmentation
-# --------------------------------
+# Callback for trial segmentation initilization
+# ----------------------------------------------
 @app.callback(
-        Output('trial-graph', 'figure'),
-        Output('trial-metrics-display', 'children'),
-        # ---
-        Input('block-selector-dropdown', 'value'), # Selected Block
-        Input('trial-selector-dropdown', 'value'), # Selected Trial
-        # ---
-        State('condition-data-store', 'data'),     # Condition
-        State('signal-data-store', 'data'),        # Session id
-        State('channel-map-store', 'data'),        # Channel Map
-        State('trial-lookup-store', 'data'),       # Trial Lookup Table
-        State('pre-stim-window-input', 'value'),   # Adjustable pre-stimulus window
-        State('post-stim-window-input', 'value'),  # Adjustable post-stimulus window
-        State('mvc-left-store', 'data'),           # Reference values
-        State('mvc-right-store', 'data')           # Reference values
-    )
-def update_trial_viewer(
-    selected_block, selected_trial,
-    condition_data_dict, session_id, channel_map, trial_lookup_dict,
-    pre_window, post_window,
+    Output('trial-graph', 'figure'),
+    Output('trial-metrics-display', 'children'),
+    Output('current-stim-time-store', 'data'),
+    Output('current-trial-metrics-store', 'data'),
+    # --- TRIGGERS ---
+    Input('block-selector-dropdown', 'value'),
+    Input('trial-selector-dropdown', 'value'),
+    # --- DATA SOURCES (as State) ---
+    State('condition-data-store', 'data'),
+    State('signal-data-store', 'data'),
+    State('channel-map-store', 'data'),
+    State('trial-lookup-store', 'data'),
+    State('pre-stim-window-input', 'value'),
+    State('post-stim-window-input', 'value'),
+    State('mvc-left-store', 'data'),
+    State('mvc-right-store', 'data')
+)
+def update_trial_data(
+    selected_block, selected_trial, condition_data_dict, session_id, 
+    channel_map, trial_lookup_dict, pre_window, post_window, 
     mvc_left, mvc_right
 ):
-    # --- FAILURE PATH ---
-    # Guard clause: Ensure required inputs exist
-    if not all([session_id, channel_map, condition_data_dict, mvc_left, mvc_right, trial_lookup_dict]):
+    """
+    This callback runs the "Full Update" when the selected trial changes.
+    It calculates metrics and redraws the plot.
+    """
+    if not all([session_id, channel_map, trial_lookup_dict, selected_block, selected_trial]):
         raise PreventUpdate
-    
-    # Defaults for block/trial if none selected
-    if selected_block is None:
-        selected_block = 1
-    if selected_trial is None:
-        selected_trial = 1
-    
-    # Recreate path to temp data folder & full path, then read pd.DataFrame from feather file
-    app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
-    app_temp_dir.mkdir(exist_ok = True)
-    print(f"Session ID in trial viewer callback: {session_id}")
-    filepath = app_temp_dir /f"{session_id}.feather"
-    df = pd.read_feather(filepath)
 
-    # Convert lookup dict to pd.DataFrame
+    app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
+    filepath = app_temp_dir / f"{session_id}.feather"
+    df = pd.read_feather(filepath)
     trial_lookup = pd.DataFrame(trial_lookup_dict)
-    # Convert block/trials to global index
+    
     matching_trials = trial_lookup.query(
         f"block_number == @selected_block and trial_number == @selected_trial"
     )
     if matching_trials.empty:
         raise PreventUpdate
     global_index_to_use = matching_trials['global_index'].iloc[0]
-    
 
-    # Get condition data as pd.DataFrame
-    condition_data = pd.DataFrame(condition_data_dict)
-
-    # Segment trial based on selected trial index
     trial_segment_df, trial_metrics = get_trial_data_and_metrics(
-        full_df = df,
-        trial_lookup = trial_lookup,
-        condition_data = condition_data,
-        trial_index = global_index_to_use,
-        channel_map = channel_map,
-        mvc_left = mvc_left,
-        mvc_right = mvc_right,
-        pre_window = pre_window,
-        post_window = post_window
+        full_df=df,
+        trial_lookup=trial_lookup,
+        condition_data=pd.DataFrame(condition_data_dict),
+        trial_index=global_index_to_use,
+        channel_map=channel_map,
+        mvc_left=mvc_left,
+        mvc_right=mvc_right,
+        pre_window=pre_window,
+        post_window=post_window
     )
+    
+    # Add a string for the plot title to the metrics dict
+    trial_metrics['block_trial_str'] = f"Block {selected_block}, Trial {selected_trial}"
 
-    #TODO: Comment out for deployment, this is for debugging/testing purposes
-    print(f"Blocks: {selected_block}, Trial: {selected_trial}", f"(Global index: {global_index_to_use})")
-    print(f"Trial segment's head:\n {trial_segment_df.head()}")
-    print(f"Trial metrics:\n {trial_metrics}")
-
-    # Channel mapping
-    time_col = channel_map.get('time')
-    force_r_col = channel_map.get('force_right')
-    force_l_col = channel_map.get('force_left')
-    emg_r_col = channel_map.get('emg_right')
-    emg_l_col = channel_map.get('emg_left')
-    include_emg = bool(emg_r_col and emg_l_col)
-
-    # Figures
-    COLOR_R = 'blue'
-    COLOR_L = 'goldenrod'
-    max_mvc = max(mvc_left, mvc_right)
-    threshold_value = trial_metrics.get('threshold')
-
-    # --- Create Figure ---
-    if include_emg:
-        # Create a figure with 2 subplots
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05)
-        # Add force traces to the first subplot
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], 
-                                 name='Right Hand', legendgroup='right', line=dict(color=COLOR_R)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], 
-                                 name='Left Hand', legendgroup='left', line=dict(color=COLOR_L)), row=1, col=1)
-        # Add EMG traces to the second subplot
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col], 
-                                 name='EMG Right', legendgroup='right', showlegend=False, line=dict(color=COLOR_R, width = 0.5)), row=2, col=1)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], 
-                                 name='EMG Left', legendgroup='left', showlegend=False, line=dict(color=COLOR_L, width = 0.5)), row=2, col=1)
-    else:
-        # FIX: Also use make_subplots for the single-plot case
-        fig = make_subplots(rows=1, cols=1)
-        # Add force traces, specifying row=1, col=1
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], 
-                                 name='Right Hand', line=dict(color=COLOR_R)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], 
-                                 name='Left Hand', line=dict(color=COLOR_L)), row=1, col=1)
-
-    # --- Apply Customizations to the Figure (this code now works for both cases) ---
-    fig.update_yaxes(title_text="Force", range=[0, max_mvc], row=1, col=1)
-
-    if include_emg:
-        fig.update_yaxes(title_text="EMG", row=2, col=1)
-
-    if threshold_value is not None:
-        fig.add_hline(y=threshold_value, line_dash="dash", line_color="grey", row=1, col=1)
-
-    fig.update_layout(title=f"Trial #{selected_trial}", margin=dict(t=30, b=0, l=0, r=0))
+    # Call the helper function to create the figure
+    fig = create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, trial_metrics)
 
     metrics_layout = dbc.Card(dbc.CardBody([
         html.P(f"{key.replace('_', ' ').title()}: {value}")
-        for key, value in trial_metrics.items()
+        for key, value in trial_metrics.items() if key != 'block_trial_str'
     ]))
     
-    return fig, metrics_layout
+    stim_time = trial_metrics.get('stim_time')
+    
+    return fig, metrics_layout, stim_time, trial_metrics
+
+
+# Callback for updating the trial viewer
+# ---------------------------------------
+@app.callback(
+    Output('trial-graph', 'figure', allow_duplicate=True),
+    # --- TRIGGERS ---
+    Input('pre-stim-window-input', 'value'),
+    Input('post-stim-window-input', 'value'),
+    # --- DATA SOURCES (as State) ---
+    State('signal-data-store', 'data'),
+    State('channel-map-store', 'data'),
+    State('mvc-left-store', 'data'),
+    State('mvc-right-store', 'data'),
+    State('current-stim-time-store', 'data'),
+    State('current-trial-metrics-store', 'data'),
+    prevent_initial_call=True
+)
+def update_graph_view(
+    pre_window, post_window, session_id, channel_map, 
+    mvc_left, mvc_right, stim_time, trial_metrics
+):
+    """
+    This callback runs the "Partial Update" when the view window changes.
+    It ONLY re-slices the data and redraws the plot. It does not calculate metrics.
+    """
+    if not all([session_id, channel_map, stim_time, trial_metrics]):
+        raise PreventUpdate
+
+    app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
+    filepath = app_temp_dir / f"{session_id}.feather"
+    df = pd.read_feather(filepath)
+
+    time_col = channel_map.get('time')
+    trial_segment_df = get_trial_segment(
+        full_df=df,
+        stim_time=stim_time,
+        time_col=time_col,
+        pre_window=pre_window,
+        post_window=post_window
+    )
+
+    # Call the helper function to re-create the figure with the new data slice
+    fig = create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, trial_metrics)
+    
+    return fig
 
 
 # ==============================================================================
