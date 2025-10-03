@@ -37,7 +37,7 @@ import webview
 #---------------------------
 from get_condition_lookup import get_condition_lookup
 from data_loader import load_signal, find_best_match
-from trial_segmentation import get_trial_segment, create_trial_lookup
+from trial_segmentation import get_trial_data_and_metrics, create_trial_lookup
 
 # DEPENDENCIES FILE MANAGEMENT:
 # Requirements.in & requirements.txt (Windows & MacOS)
@@ -839,7 +839,7 @@ def update_trial_viewer(
     condition_data = pd.DataFrame(condition_data_dict)
 
     # Segment trial based on selected trial index
-    trial_segment_df, trial_metrics = get_trial_segment(
+    trial_segment_df, trial_metrics = get_trial_data_and_metrics(
         full_df = df,
         trial_lookup = trial_lookup,
         condition_data = condition_data,
