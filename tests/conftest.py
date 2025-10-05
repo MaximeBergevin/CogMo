@@ -57,7 +57,7 @@ def create_mock_trial_lookup(
     n_trials_total = n_blocks * trials_per_block
 
     # Generate global trial indices from 1 to n_trials_total
-    global_indices = np.arrange(1, n_trials_total + 1)
+    global_indices = np.arange(1, n_trials_total + 1)
 
     # Calculate block numbers
     block_numbers = ((global_indices - 1) // trials_per_block) + 1
@@ -110,11 +110,12 @@ def mock_file_factory(tmp_path: Path) -> Callable:
 
 
 def create_mock_signal_data(
-     total_duration_s: float = 3.0,
+    total_duration_s: float = 3.0,
     sampling_rate_hz: int = 500,
     stim_time_within_segment: float = 1.5,
     block_num_of_segment: int = 1,
     trial_num_at_stim: int = 1,
+    expected_resp_at_stim: str = "right",
     include_emg: bool = True,
     dominant_force: str = "right",
     motor_condition: str = "low",
@@ -132,11 +133,12 @@ def create_mock_signal_data(
     """
     Generates a DataFrame simulating a segment of force_data for testing.
     Also calculates and returns the "ground truth" metrics for the generated data.
-    """   
+    """
     # Time vector
     # ------------
     time_increment = 1 / sampling_rate_hz
-    n_time_points = int(total_duration_s * time_increment) + 1
+    # Corrected bug: Was multiplication, should be division
+    n_time_points = int(total_duration_s / time_increment) + 1
     time_points = np.linspace(0, total_duration_s, n_time_points)
 
     # Base DataFrame with noise
@@ -161,6 +163,7 @@ def create_mock_signal_data(
     stim_row_index = (df['time'] - stim_time_within_segment).abs().idxmin()
     df.loc[stim_row_index, 'is_trial_start'] = True
     df.loc[stim_row_index, 'trial_number'] = trial_num_at_stim
+    df.loc[stim_row_index, 'expected_response'] = expected_resp_at_stim # Added missing logic
     stim_time_exact = df.loc[stim_row_index, 'time']
 
     # Force burst generation
@@ -193,9 +196,7 @@ def create_mock_signal_data(
     # Inject the burst into the dominant hand's data
     if dominant_force in ["right", "left"]:
         dominant_col = force_r_col_name if dominant_force == "right" else force_l_col_name
-        # Overwrite the noise in the burst region
         df.loc[burst_indices, dominant_col] = burst_vals
-        # Add baseline shift
         df[dominant_col] += shift_baseline
 
     # Calculate 'ground truth' metrics for testing
@@ -207,11 +208,10 @@ def create_mock_signal_data(
         "expected_onset_time": df.loc[onset_index, 'time'] if onset_index < n_time_points else np.nan,
         "expected_peak_time": df.loc[onset_index + half - 1, 'time'] if n_points > 0 else np.nan,
         "expected_threshold": threshold
-        # Add any other ground truth metrics you calculate in the R function here...
     }
 
     return df, expected_metrics
 
 @pytest.fixture
-def mock_force_data_factory() -> Callable:
+def mock_signal_data_factory() -> Callable:
     return create_mock_signal_data

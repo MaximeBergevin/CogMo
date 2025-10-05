@@ -14,7 +14,7 @@ def create_trial_lookup(data: pd.DataFrame) -> Optional[pd.DataFrame]:
         subset=['block_number', 'trial_number']
     ).copy()
     unique_trials['global_index'] = range(1, len(unique_trials) + 1)
-    return unique_trials[['global_index', 'block_number', 'trial_number']]
+    return unique_trials[['global_index', 'block_number', 'trial_number']].reset_index(drop=True)
 
 def _resolve_col(df: pd.DataFrame, pattern: str) -> Optional[str]:
     """Finds the first column in a DataFrame that matches a regex pattern, case-insensitively."""
