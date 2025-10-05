@@ -169,7 +169,6 @@ app.layout = dbc.Container([
                         ),
                         dbc.Col(
                             html.Div([
-                                # A placeholder to align the button with the other one
                                 html.H4(html.Br()),
                                 dcc.Upload(
                                     id='upload-condition-order',
@@ -190,8 +189,8 @@ app.layout = dbc.Container([
                                     id = 'condition-upload-throbber',
                                     type = 'dot',
                                     children = html.Div(id = 'condition-upload-output-message',
-                                                         className='mt-1',
-                                                         style={'min-height': '25px'})
+                                                          className='mt-1',
+                                                          style={'min-height': '25px'})
                                 )
                             ]),
                             width=6,
@@ -234,76 +233,111 @@ app.layout = dbc.Container([
                             ]),
                             width=6
                         ),
-                    ]),                   
+                    ]), 
                 ], className="p-3")
             ]
         ),
-        # Third Tab: Analyses Option
+        
+
+        # --- Second tab: Analyses Option Tab ---
         dbc.Tab(
             label="Analyses Option",
             children=[
                 html.Div([
-                    html.H4("Content for Analyses Option Tab"),
+                    dbc.Row([
+                        # --- Left Column: Force Analyses ---
+                        dbc.Col([
+                            html.H4("Force Signal Analyses"),
+                            html.Hr(),
+                            
+                            html.H6("Latencies", className="mt-3"),
+                            dbc.Checkbox(id="analysis-mrt-checkbox", label="Motor Reaction Time"),
+                            dbc.Checkbox(id="analysis-mrspt-checkbox", label="Motor Response Time"),
+                            
+                            html.H6("Rate of Force", className="mt-4"),
+                            dbc.Checkbox(id="analysis-rfd-checkbox", label="Rate of Force Development (RFD)", value=True),
+                            dbc.Input(id="analysis-rfd-window-input", type="number", value=75, placeholder="e.g., 75", disabled=False, className="mt-2 w-50"),
+
+                            html.H6("Force Magnitudes", className="mt-4"),
+                            dbc.Checkbox(id="analysis-peak-force-checkbox", label="Peak Force & Overshoot"),
+                            dbc.Checkbox(id="analysis-mean-force-checkbox", label="Mean Force"),
+                            dbc.Checkbox(id="analysis-fti-checkbox", label="Force-Time Integral"),
+                        ], width=6),
+
+                        # --- Right Column: EMG Analyses ---
+                        dbc.Col([
+                            html.H4("EMG Signal Analyses"),
+                            html.Hr(),
+
+                            html.H6("Latency", className="mt-3"),
+                            dbc.Checkbox(id="analysis-pmrt-checkbox", label="Premotor Reaction Time"),
+                            
+                            html.H6("EMG Activity", className="mt-4"),
+                            dbc.Checkbox(id="analysis-rms-checkbox", label="Root Mean Square (RMS)"),
+                        ], width=6),
+                    ]),
+                    
+                    # --- Tooltips for all checkboxes ---
+                    dbc.Tooltip("Time from stimulus onset to force onset.", target="analysis-mrt-checkbox"),
+                    dbc.Tooltip("Time from force onset to peak force.", target="analysis-mrspt-checkbox"),
+                    dbc.Tooltip("The steepest slope of the force curve after force onset.", target="analysis-rfd-checkbox"),
+                    dbc.Tooltip("Time from EMG onset to force onset.", target="analysis-pmrt-checkbox"),
+                    dbc.Tooltip("The peak force achieved and the amount it exceeds the target.", target="analysis-peak-force-checkbox"),
+                    dbc.Tooltip("The average force during a specified window.", target="analysis-mean-force-checkbox"),
+                    dbc.Tooltip("The area under the force-time curve.", target="analysis-fti-checkbox"),
+                    dbc.Tooltip("A measure of the magnitude of the EMG signal.", target="analysis-rms-checkbox"),
+
                 ], className="p-3")
             ]
         ),
-        # Fourth Tab: Trial Viewer
+
+        # Third Tab: Trial Viewer
         dbc.Tab(
-    label="Trial Viewer",
-    children=[
-        html.Div([
-            dbc.Row([
-                dbc.Col([
-                    html.H4("Trial Controls", className="mt-3"),
+            label="Trial Viewer",
+            children=[
+                html.Div([
                     dbc.Row([
                         dbc.Col([
-                            dbc.Label("Select Block:"),
-                            dcc.Dropdown(id='block-selector-dropdown')
-                        ], width=6),
+                            html.H4("Trial Controls", className="mt-3"),
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.Label("Select Block:"),
+                                    dcc.Dropdown(id='block-selector-dropdown')
+                                ], width=6),
+                                dbc.Col([
+                                    dbc.Label("Select Trial:"),
+                                    dbc.InputGroup([
+                                        dbc.Button(
+                                            html.I(className="fas fa-chevron-left"),
+                                            id='prev-trial-button', n_clicks=0, color="secondary", outline=True
+                                        ),
+                                        dcc.Dropdown(id='trial-selector-dropdown', style={'flex': '1'}),
+                                        dbc.Button(
+                                            html.I(className="fas fa-chevron-right"),
+                                            id='next-trial-button', n_clicks=0, color="secondary", outline=True
+                                        )
+                                    ])
+                                ], width=6)
+                            ]),
+                            dbc.Label("Pre-Stimulus Window (s):", className="mt-3"),
+                            dbc.Input(id='pre-stim-window-input', type='number', value=0.125, step=0.05),
+                    
+                            dbc.Label("Post-Stimulus Window (s):", className="mt-3"),
+                            dbc.Input(id='post-stim-window-input', type='number', value=1.25, step=0.05),
+                            
+                            html.Hr(),
+                            
+                            html.H4("Trial Metrics"),
+                            html.Div(id='trial-metrics-display'), 
+                        ], width=4),
+                        
                         dbc.Col([
-                            dbc.Label("Select Trial:"),
-                            dbc.InputGroup([
-                    dbc.Button(
-                        html.I(className="fas fa-chevron-left"), # Left arrow icon
-                        id='prev-trial-button',
-                        n_clicks=0,
-                        color="secondary",
-                        outline=True
-                    ),
-                    dcc.Dropdown(id='trial-selector-dropdown', style={'flex': '1'}), # Added flex style to fill space
-                    dbc.Button(
-                        html.I(className="fas fa-chevron-right"), # Right arrow icon
-                        id='next-trial-button',
-                        n_clicks=0,
-                        color="secondary",
-                        outline=True
-                    )
-                ])
-                        ], width=6)
-                    ]),
-                    # Parameter Controls
-                    dbc.Label("Pre-Stimulus Window (s):", className="mt-3"),
-                    dbc.Input(id='pre-stim-window-input', type='number', value=0.125, step=0.05),
-    
-                    dbc.Label("Post-Stimulus Window (s):", className="mt-3"),
-                    dbc.Input(id='post-stim-window-input', type='number', value=1.25, step=0.05),
-                    
-                    html.Hr(),
-                    
-                    
-                    # Display area for calculated metrics
-                    html.H4("Trial Metrics"),
-                    html.Div(id='trial-metrics-display'),                 
-                ], width=4),  # End of sidebar column
-                
-                # --- Main Area for the Graph ---
-                dbc.Col([
-                    dcc.Graph(id='trial-graph', style={'height': '80vh'})
-                ], width=8)  # End of graph column
-            ])
-        ], className="p-3")
-    ]
-),
+                            dcc.Graph(id='trial-graph', style={'height': '80vh'})
+                        ], width=8)
+                    ])
+                ], className="p-3")
+            ]
+        ),
     ])
 ], fluid=False, style={'width': '1000px', 'overflow-x': 'hidden'})
 
@@ -706,6 +740,19 @@ def upload_condition_callback(condition_contents, condition_filename):
 )
 def update_reference_values(mvc_left, mvc_right, rfd_left, rfd_right):
     return mvc_left, mvc_right, rfd_left, rfd_right
+
+
+# Callback to enable/disable the RFD window input
+# ------------------------------------------------
+@app.callback(
+    Output('analysis-rfd-window-input', 'disabled'),
+    Input('analysis-rfd-checkbox', 'value')
+)
+def toggle_rfd_input_disabled(is_checked):
+    """
+    Disables the RFD window input if the RFD analysis checkbox is unchecked.
+    """
+    return not is_checked
 
 
 # Callback for block navigation
