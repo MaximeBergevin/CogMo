@@ -38,6 +38,7 @@ import webview
 from get_condition_lookup import get_condition_lookup
 from data_loader import load_signal, find_best_match
 from trial_segmentation import get_trial_data_and_metrics, get_trial_segment, create_trial_lookup
+from force_analyses import peak_force_metrics
 
 # DEPENDENCIES FILE MANAGEMENT:
 # Requirements.in & requirements.txt (Windows & MacOS)
@@ -84,7 +85,7 @@ ERROR_UPLOAD_STYLE['borderColor'] = 'red'
 # ==============================================================================
 
 def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, trial_metrics):
-    """Creates the Plotly figure for the trial viewer."""
+    """Creates the Plotly figure for the trial viewer, with conditional visualizations."""
     time_col = channel_map.get('time')
     force_r_col = channel_map.get('force_right')
     force_l_col = channel_map.get('force_left')
@@ -94,18 +95,16 @@ def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, tria
 
     COLOR_R = 'blue'
     COLOR_L = 'goldenrod'
-    max_mvc = max(mvc_left, mvc_right)
+    max_mvc = max(mvc_left, mvc_right) if mvc_left and mvc_right else 1
     threshold_value = trial_metrics.get('threshold')
-    selected_trial = trial_metrics.get('block_trial_str', 'Trial') # A default title
+    selected_trial = trial_metrics.get('block_trial_str', 'Trial')
 
     if include_emg:
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05)
-        # Force Traces
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], 
                                 name='Right Hand', legendgroup='right', line=dict(color=COLOR_R)), row=1, col=1)
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], 
                                 name='Left Hand', legendgroup='left', line=dict(color=COLOR_L)), row=1, col=1)
-        # EMG Traces
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col], 
                                 name='EMG Right', legendgroup='right', showlegend=False, line=dict(color=COLOR_R)), row=2, col=1)
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], 
@@ -113,16 +112,45 @@ def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, tria
         fig.update_yaxes(title_text="EMG", row=2, col=1)
     else:
         fig = make_subplots(rows=1, cols=1)
-        # Force Traces
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], 
                                 name='Right Hand', line=dict(color=COLOR_R)), row=1, col=1)
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], 
                                 name='Left Hand', line=dict(color=COLOR_L)), row=1, col=1)
 
     fig.update_yaxes(title_text="Force", range=[0, max_mvc], row=1, col=1)
+    
+    # --- Horizontal dashline for the threshold ---
     if threshold_value is not None:
         fig.add_hline(y=threshold_value, line_dash="dash", line_color="grey", row=1, col=1)
-    
+
+    # Add visualizations if peak force metrics are available ---
+    peak_force = trial_metrics.get('peak_force')
+    time_to_peak = trial_metrics.get('time_to_peak')
+    stim_time = trial_metrics.get('stim_time')
+
+    # Check if all the necessary values exist to draw the lines
+    if all(v is not None for v in [peak_force, time_to_peak, stim_time, threshold_value]):
+        peak_time = stim_time + time_to_peak
+        
+        # 1. Add a marker for the peak force
+        fig.add_trace(go.Scatter(
+            x=[peak_time],
+            y=[peak_force],
+            mode='markers',
+            marker=dict(color='red', size=10, symbol='x'),
+            name='Peak Force',
+            showlegend=False
+        ), row=1, col=1)
+
+        # 2. Add the vertical dashline between the peak and the threshold
+        fig.add_trace(go.Scatter(
+            x=[peak_time, peak_time],
+            y=[threshold_value, peak_force],
+            mode='lines',
+            line=dict(color='red', dash='dash', width=1),
+            showlegend=False
+        ), row=1, col=1)
+
     fig.update_layout(title=selected_trial, margin=dict(t=30, b=0, l=0, r=0))
     
     return fig
@@ -340,6 +368,7 @@ app.layout = dbc.Container([
         ),
     ])
 ], fluid=False, style={'width': '1000px', 'overflow-x': 'hidden'})
+
 
 # Add dcc.Store components to save the identified comment types and reference values
 # File storage (as data frame) and channel mapping
@@ -886,10 +915,10 @@ def handle_trial_navigation(
     Output('trial-metrics-display', 'children'),
     Output('current-stim-time-store', 'data'),
     Output('current-trial-metrics-store', 'data'),
-    # --- TRIGGERS ---
+    # Triggers
     Input('block-selector-dropdown', 'value'),
     Input('trial-selector-dropdown', 'value'),
-    # --- DATA SOURCES (as State) ---
+    # Data Sources (as State)
     State('condition-data-store', 'data'),
     State('signal-data-store', 'data'),
     State('channel-map-store', 'data'),
@@ -897,16 +926,18 @@ def handle_trial_navigation(
     State('pre-stim-window-input', 'value'),
     State('post-stim-window-input', 'value'),
     State('mvc-left-store', 'data'),
-    State('mvc-right-store', 'data')
+    State('mvc-right-store', 'data'),
+    State('analysis-peak-force-checkbox', 'value')
 )
 def update_trial_data(
-    selected_block, selected_trial, condition_data_dict, session_id, 
-    channel_map, trial_lookup_dict, pre_window, post_window, 
-    mvc_left, mvc_right
+    selected_block, selected_trial, condition_data_dict, session_id,
+    channel_map, trial_lookup_dict, pre_window, post_window,
+    mvc_left, mvc_right,
+    run_peak_force
 ):
     """
-    This callback runs the "Full Update" when the selected trial changes.
-    It calculates metrics and redraws the plot.
+    This callback runs a "Full Update" when the selected trial changes.
+    It now also runs any selected analyses for that SINGLE trial.
     """
     if not all([session_id, channel_map, trial_lookup_dict, selected_block, selected_trial]):
         raise PreventUpdate
@@ -915,7 +946,7 @@ def update_trial_data(
     filepath = app_temp_dir / f"{session_id}.feather"
     df = pd.read_feather(filepath)
     trial_lookup = pd.DataFrame(trial_lookup_dict)
-    
+
     matching_trials = trial_lookup.query(
         f"block_number == @selected_block and trial_number == @selected_trial"
     )
@@ -923,7 +954,8 @@ def update_trial_data(
         raise PreventUpdate
     global_index_to_use = matching_trials['global_index'].iloc[0]
 
-    trial_segment_df, trial_metrics = get_trial_data_and_metrics(
+    # Call the main "contractor" function to get the base data and metrics
+    trial_segment_df, base_metrics = get_trial_data_and_metrics(
         full_df=df,
         trial_lookup=trial_lookup,
         condition_data=pd.DataFrame(condition_data_dict),
@@ -934,21 +966,31 @@ def update_trial_data(
         pre_window=pre_window,
         post_window=post_window
     )
-    
-    # Add a string for the plot title to the metrics dict
-    trial_metrics['block_trial_str'] = f"Block {selected_block}, Trial {selected_trial}"
 
-    # Call the helper function to create the figure
-    fig = create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, trial_metrics)
+    # Conditionally run selected analyses for this single trial
+    if run_peak_force:
+        peak_metrics = peak_force_metrics(
+            signal_df=trial_segment_df,
+            stim_time=base_metrics['stim_time'],
+            response_hand=base_metrics['response_hand'],
+            threshold=base_metrics['threshold'],
+            mvc_left=mvc_left,
+            mvc_right=mvc_right
+        )
+        # Merge the new metrics into the main dictionary
+        base_metrics.update(peak_metrics)
+
+    base_metrics['block_trial_str'] = f"Block {selected_block}, Trial {selected_trial}"
+    fig = create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, base_metrics)
 
     metrics_layout = dbc.Card(dbc.CardBody([
         html.P(f"{key.replace('_', ' ').title()}: {value}")
-        for key, value in trial_metrics.items() if key != 'block_trial_str'
+        for key, value in base_metrics.items() if key != 'block_trial_str'
     ]))
-    
-    stim_time = trial_metrics.get('stim_time')
-    
-    return fig, metrics_layout, stim_time, trial_metrics
+
+    stim_time = base_metrics.get('stim_time')
+
+    return fig, metrics_layout, stim_time, base_metrics
 
 
 # Callback for updating the trial viewer
