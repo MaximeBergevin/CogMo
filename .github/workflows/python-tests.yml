@@ -37,6 +37,7 @@ jobs:
           python -m pip install --upgrade pip pip-tools
           pip-compile requirements.in -o requirements_linux.txt
           pip install -r requirements_linux.txt
+          pip install -e . # Install the package in editable mode
       
       # TODO: Translate unit tests from R to python
       #- name: Run Unit Tests

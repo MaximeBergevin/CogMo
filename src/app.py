@@ -143,7 +143,7 @@ def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, tria
             y=0.98,
             xanchor="right",
             x=0.98,
-            bgcolor="rgba(255, 255, 255, 0)" # Semi-transparent background
+            bgcolor="rgba(255, 255, 255, 0)" # Transparent background
         )
     )
     
