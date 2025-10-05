@@ -38,7 +38,7 @@ import webview
 from get_condition_lookup import get_condition_lookup
 from data_loader import load_signal, find_best_match
 from trial_segmentation import get_trial_data_and_metrics, get_trial_segment, create_trial_lookup
-from force_analyses import motor_response_time, peak_force_metrics
+from force_analyses import find_contraction_onset, motor_reaction_time, motor_response_time, peak_force_metrics
 
 # DEPENDENCIES FILE MANAGEMENT:
 # Requirements.in & requirements.txt (Windows & MacOS)
@@ -1005,9 +1005,12 @@ def update_trial_data(
     )
 
     # --- Analysis Dependency Chain ---
+    # ----------------------------------
 
-    # 1. Foundational metrics (e.g., peak force) are needed for several analyses
+    # 1. Foundational metrics that are needed for several analyses
     if run_peak_force or run_motor_reaction_time or run_motor_response_time:
+        
+        # Calculate peak metrics (needed by almost everything)
         peak_metrics = peak_force_metrics(
             signal_df=trial_segment_df,
             stim_time=base_metrics['stim_time'],
@@ -1016,10 +1019,28 @@ def update_trial_data(
             mvc_left=mvc_left,
             mvc_right=mvc_right
         )
-        # Merge the new metrics into the main dictionary
         base_metrics.update(peak_metrics)
+        
+        # Calculate onset time (as it is also foundational for many metrics)
+        # This check ensures we have the peak_time needed by find_contraction_onset
+        if 'time_to_peak' in base_metrics:
+            onset_time = find_contraction_onset(
+                signal_df=trial_segment_df,
+                stim_time=base_metrics['stim_time'],
+                peak_time=base_metrics['stim_time'] + base_metrics['time_to_peak'],
+                response_hand=base_metrics['response_hand']
+            )
+            # Store the raw onset time so other functions can reuse it
+            base_metrics['force_onset_time'] = onset_time
 
     # 2. Run dependent metrics
+    if run_motor_reaction_time:
+        mrt_val = motor_reaction_time(
+            stim_time=base_metrics.get('stim_time'),
+            onset_time=base_metrics.get('force_onset_time') # REUSE
+        )
+        base_metrics['motor_reaction_time'] = mrt_val
+
     if run_motor_response_time:
         if all(k in base_metrics for k in ['time_to_peak', 'peak_force']):
             mrspt_val = motor_response_time(
@@ -1031,10 +1052,7 @@ def update_trial_data(
                 response_hand=base_metrics['response_hand']
             )
             base_metrics['motor_response_time'] = mrspt_val
-    
-    if run_motor_reaction_time:
-        # Placeholder for when we define what "Motor Reaction Time" is
-        pass
+ 
 
     # --- Plotting and display logic ---
     base_metrics['block_trial_str'] = f"Block {selected_block}, Trial {selected_trial}"

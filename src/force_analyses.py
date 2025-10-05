@@ -75,6 +75,23 @@ def find_contraction_onset(
     return onset_candidates['time'].max()
 
 
+def motor_reaction_time(
+    stim_time: float,
+    onset_time: Optional[float]
+) -> Optional[int]:
+    """
+    Calculates motor reaction time (stimulus to onset) in milliseconds.
+    """
+    # Return None if onset was not detected or occurred before the stimulus
+    if onset_time is None or onset_time < stim_time:
+        return None
+    
+    # Calculate motor reaction time in ms
+    motor_rt_ms = int(round((onset_time - stim_time) * 1000))
+    
+    return motor_rt_ms
+
+
 def motor_response_time(
     signal_df: pd.DataFrame,
     stim_time: float,
