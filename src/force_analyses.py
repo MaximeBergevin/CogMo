@@ -6,6 +6,75 @@ import pandas as pd
 import numpy as np
 
 
+def find_contraction_onset(
+    signal_df: pd.DataFrame,
+    stim_time: float,
+    peak_time: float,
+    response_hand: str
+) -> Optional[float]:
+    """
+    Computes contraction onset time based on a stable pre-peak baseline.
+
+    Finds a stable 50ms pre-peak baseline window, sets a threshold (mean + 3*SD),
+    then scans backward from the peak to find the last time force <= threshold.
+
+    Returns:
+        The time (in seconds) of contraction onset, or None if not detected.
+    """
+    force_col = f"force_{response_hand}"
+    
+    # Iteratively search for a stable baseline window
+    baseline_start = peak_time - 0.250
+    baseline_end = baseline_start + 0.050
+    shift_s = 0.050  # 50 ms
+    max_iter = 10
+    threshold = None
+
+    for _ in range(max_iter):
+        if baseline_start < stim_time:
+            break # Stop if the window moves before the stimulus
+
+        baseline_df = signal_df[
+            (signal_df['time'] >= baseline_start) & (signal_df['time'] < baseline_end)
+        ]
+        
+        if baseline_df.empty:
+            break
+
+        baseline_sd = baseline_df[force_col].std()
+        
+        if baseline_sd <= 1.0:
+            baseline_mean = baseline_df[force_col].mean()
+            threshold = baseline_mean + (3 * baseline_sd)
+            break # Stable baseline found
+        
+        # Shift the window based on drift direction
+        half_idx = len(baseline_df) // 2
+        early_mean = baseline_df[force_col].iloc[:half_idx].mean()
+        late_mean = baseline_df[force_col].iloc[half_idx:].mean()
+        
+        if late_mean > early_mean:
+            baseline_start -= shift_s
+            baseline_end -= shift_s
+        else:
+            baseline_start += shift_s
+            baseline_end += shift_s
+
+    if threshold is None:
+        return None # No stable baseline was found
+
+    # Scan backward from the peak to find the last point at or below the threshold
+    onset_window_df = signal_df[
+        (signal_df['time'] >= stim_time) & (signal_df['time'] <= peak_time)
+    ]
+    onset_candidates = onset_window_df[onset_window_df[force_col] <= threshold]
+    
+    if onset_candidates.empty:
+        return None
+
+    return onset_candidates['time'].max()
+
+
 def motor_response_time(
     signal_df: pd.DataFrame,
     stim_time: float,

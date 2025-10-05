@@ -109,6 +109,9 @@ def test_get_trial_segment_slicing():
     post_window = 2.0
 
     result_df = get_trial_segment(full_df, stim_time, 'time', pre_window, post_window)
+
+    # Assertions
+    # ------------
     
     # The first time point should be stim_time - pre_window
     assert result_df['time'].min() == pytest.approx(4.0)

@@ -25,6 +25,9 @@ def test_load_signal(mock_file_factory):
     with pytest.warns(UserWarning, match = "Automatically added 'time' column"):
         df, comment_summary = load_signal(filepath = mock_filepath)
 
+    # Assertions
+    # ------------
+    
     # 1. Check output type
     assert isinstance(df, pd.DataFrame)
     assert isinstance(comment_summary, dict)

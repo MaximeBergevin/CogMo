@@ -48,7 +48,8 @@ def test_peak_force_metrics(
         mvc_right = mvc_val
     )
 
-    # Assertions
+     # Assertions
+    # ------------
 
     # 1. Check absolute force values
     assert results['peak_force'] == pytest.approx(expected['expected_peak_value'])
@@ -101,6 +102,9 @@ def test_motor_response_time_happy_path_low_force(mock_signal_data_factory):
         threshold = expected['expected_threshold'],
         response_hand = "right"
     )
+
+     # Assertions
+     # ------------
 
     # 1. Check type and value
     assert isinstance(result, int)
@@ -157,5 +161,7 @@ def test_motor_response_time_undershoot_returns_none(mock_signal_data_factory):
         response_hand = "right"
     )
     
+     # Assertions
+     # ------------
     # 1. Check that result is None
     assert result is None
