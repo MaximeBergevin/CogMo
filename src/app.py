@@ -85,7 +85,8 @@ ERROR_UPLOAD_STYLE['borderColor'] = 'red'
 # ==============================================================================
 
 def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, trial_metrics,
-                        run_peak_force: bool = False, run_motor_response_time: bool = False):
+                        run_peak_force: bool = False, run_motor_response_time: bool = False,
+                        run_motor_reaction_time: bool = False):
     """Creates the Plotly figure for the trial viewer, with conditional visualizations."""
     time_col = channel_map.get('time')
     force_r_col = channel_map.get('force_right')
@@ -135,6 +136,19 @@ def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, tria
             showlegend=False
         ), row=1, col=1)
 
+    # --- Visualization for Motor Reaction Time ---
+    mrt = trial_metrics.get('motor_reaction_time')
+    if run_motor_reaction_time and all(v is not None for v in [mrt, stim_time, threshold_value]):
+        force_onset_time = stim_time + (mrt / 1000.0)
+        fig.add_trace(go.Scatter(
+            x=[force_onset_time, force_onset_time],
+            y=[0, threshold_value],
+            mode='lines',
+            line=dict(color='orange', dash='dash', width=1),
+            name='Force Onset',
+            showlegend=False
+        ), row=1, col=1)
+
     # --- Visualization for Motor Response Time ---
     mrspt = trial_metrics.get('motor_response_time')
     if run_motor_response_time and all(v is not None for v in [mrspt, stim_time, threshold_value]):
@@ -143,10 +157,11 @@ def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, tria
             x=[force_onset_time, force_onset_time],
             y=[0, threshold_value],
             mode='lines',
-            line=dict(color='green', dash='dash', width=1), # Changed to dash per your FYI
+            line=dict(color='green', dash='dash', width=1),
             name='Force Onset',
             showlegend=False
         ), row=1, col=1)
+
         
     # --- Layout with Stimulus Arrow Annotation ---
     annotations = []
@@ -963,8 +978,8 @@ def handle_trial_navigation(
     State('mvc-right-store', 'data'),
     # Analysis States
     State('analysis-peak-force-checkbox', 'value'),
-    State('analysis-mrspt-checkbox', 'value'), # Motor Response Time
-    State('analysis-mrt-checkbox', 'value')     # Motor Reaction Time
+    State('analysis-mrspt-checkbox', 'value'),
+    State('analysis-mrt-checkbox', 'value')    
 )
 def update_trial_data(
     selected_block, selected_trial, condition_data_dict, session_id,
@@ -1059,7 +1074,8 @@ def update_trial_data(
     fig = create_trial_figure(
         trial_segment_df, channel_map, mvc_left, mvc_right, base_metrics,
         run_peak_force=run_peak_force, 
-        run_motor_response_time=run_motor_response_time
+        run_motor_response_time=run_motor_response_time,
+        run_motor_reaction_time=run_motor_reaction_time
     )
     
     metrics_layout = dbc.Card(dbc.CardBody([
@@ -1088,13 +1104,14 @@ def update_trial_data(
     State('current-trial-metrics-store', 'data'),
     # Add states for the analysis checkboxes
     State('analysis-peak-force-checkbox', 'value'),
+    State('analysis-mrspt-checkbox', 'value'),
     State('analysis-mrt-checkbox', 'value'),
     prevent_initial_call=True
 )
 def update_graph_view(
     pre_window, post_window, session_id, channel_map, 
     mvc_left, mvc_right, stim_time, trial_metrics,
-    run_peak_force, run_motor_response_time
+    run_peak_force, run_motor_response_time, run_motor_reaction_time
 ):
     """
     This callback runs the "Partial Update" when the view window changes.
@@ -1120,7 +1137,8 @@ def update_graph_view(
     fig = create_trial_figure(
         trial_segment_df, channel_map, mvc_left, mvc_right, trial_metrics,
         run_peak_force=run_peak_force, 
-        run_motor_response_time=run_motor_response_time
+        run_motor_response_time=run_motor_response_time,
+        run_motor_reaction_time=run_motor_reaction_time
     )
     
     return fig
