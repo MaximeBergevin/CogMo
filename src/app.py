@@ -38,7 +38,7 @@ import webview
 from get_condition_lookup import get_condition_lookup
 from data_loader import load_signal, find_best_match
 from trial_segmentation import get_trial_data_and_metrics, get_trial_segment, create_trial_lookup
-from force_analyses import peak_force_metrics
+from force_analyses import motor_response_time, peak_force_metrics
 
 # DEPENDENCIES FILE MANAGEMENT:
 # Requirements.in & requirements.txt (Windows & MacOS)
@@ -84,7 +84,8 @@ ERROR_UPLOAD_STYLE['borderColor'] = 'red'
 # --- HELPER FUNCTIONS ---
 # ==============================================================================
 
-def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, trial_metrics):
+def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, trial_metrics,
+                        run_peak_force: bool = False, run_motor_response_time: bool = False):
     """Creates the Plotly figure for the trial viewer, with conditional visualizations."""
     time_col = channel_map.get('time')
     force_r_col = channel_map.get('force_right')
@@ -98,53 +99,74 @@ def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, tria
     max_mvc = max(mvc_left, mvc_right) if mvc_left and mvc_right else 1
     threshold_value = trial_metrics.get('threshold')
     selected_trial = trial_metrics.get('block_trial_str', 'Trial')
+    stim_time = trial_metrics.get('stim_time')
 
     if include_emg:
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], 
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col],
                                 name='Right Hand', legendgroup='right', line=dict(color=COLOR_R)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], 
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col],
                                 name='Left Hand', legendgroup='left', line=dict(color=COLOR_L)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col], 
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col],
                                 name='EMG Right', legendgroup='right', showlegend=False, line=dict(width = 0.5, color=COLOR_R)), row=2, col=1)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], 
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col],
                                 name='EMG Left', legendgroup='left', showlegend=False, line=dict(width = 0.5, color=COLOR_L)), row=2, col=1)
         fig.update_yaxes(title_text="EMG", row=2, col=1)
     else:
         fig = make_subplots(rows=1, cols=1)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], 
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col],
                                 name='Right Hand', line=dict(color=COLOR_R)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], 
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col],
                                 name='Left Hand', line=dict(color=COLOR_L)), row=1, col=1)
 
     fig.update_yaxes(title_text="Force", range=[0, max_mvc], row=1, col=1)
-    
+
     if threshold_value is not None:
         fig.add_hline(y=threshold_value, line_dash="dash", line_color="grey", row=1, col=1)
 
+    # --- Visualization for Peak Force ---
     peak_force = trial_metrics.get('peak_force')
     time_to_peak = trial_metrics.get('time_to_peak')
-    stim_time = trial_metrics.get('stim_time')
-
-    if all(v is not None for v in [peak_force, time_to_peak, stim_time, threshold_value]):
+    if run_peak_force and all(v is not None for v in [peak_force, time_to_peak, stim_time, threshold_value]):
         peak_time = stim_time + time_to_peak
-
         fig.add_trace(go.Scatter(
             x=[peak_time, peak_time], y=[threshold_value, peak_force],
-            mode='lines', line=dict(color='purple', dash='dash', width=1),
+            mode='lines', line=dict(color='red', dash='dash', width=1),
             showlegend=False
         ), row=1, col=1)
-    
+
+    # --- Visualization for Motor Response Time ---
+    mrspt = trial_metrics.get('motor_response_time')
+    if run_motor_response_time and all(v is not None for v in [mrspt, stim_time, threshold_value]):
+        force_onset_time = stim_time + (mrspt / 1000.0)
+        fig.add_trace(go.Scatter(
+            x=[force_onset_time, force_onset_time],
+            y=[0, threshold_value],
+            mode='lines',
+            line=dict(color='green', dash='dash', width=1), # Changed to dash per your FYI
+            name='Force Onset',
+            showlegend=False
+        ), row=1, col=1)
+        
+    # --- Layout with Stimulus Arrow Annotation ---
+    annotations = []
+    if stim_time is not None:
+        annotations.append(
+            dict(
+                x=stim_time, y=0, xref="x", yref="y", text="",
+                showarrow=True, arrowhead=2, arrowsize=1.5, arrowwidth=1.5,
+                arrowcolor="black", ax=0, ay=-40
+            )
+        )
+
     fig.update_layout(
-        title=selected_trial, 
+        title=selected_trial,
         margin=dict(t=30, b=0, l=0, r=0),
         legend=dict(
-            yanchor="top",
-            y=0.98,
-            xanchor="right",
-            x=0.98,
-            bgcolor="rgba(255, 255, 255, 0)" # Transparent background
-        )
+            yanchor="top", y=0.98, xanchor="right", x=0.98,
+            bgcolor="rgba(255, 255, 255, 0.75)"
+        ),
+        annotations=annotations
     )
     
     return fig
@@ -939,17 +961,20 @@ def handle_trial_navigation(
     State('post-stim-window-input', 'value'),
     State('mvc-left-store', 'data'),
     State('mvc-right-store', 'data'),
-    State('analysis-peak-force-checkbox', 'value')
+    # Analysis States
+    State('analysis-peak-force-checkbox', 'value'),
+    State('analysis-mrspt-checkbox', 'value'), # Motor Response Time
+    State('analysis-mrt-checkbox', 'value')     # Motor Reaction Time
 )
 def update_trial_data(
     selected_block, selected_trial, condition_data_dict, session_id,
     channel_map, trial_lookup_dict, pre_window, post_window,
     mvc_left, mvc_right,
-    run_peak_force
+    run_peak_force, run_motor_response_time, run_motor_reaction_time
 ):
     """
-    This callback runs a "Full Update" when the selected trial changes.
-    It now also runs any selected analyses for that SINGLE trial.
+    This callback runs a "Full Update" when the selected trial changes,
+    including any selected single-trial analyses in a dependency chain.
     """
     if not all([session_id, channel_map, trial_lookup_dict, selected_block, selected_trial]):
         raise PreventUpdate
@@ -979,8 +1004,10 @@ def update_trial_data(
         post_window=post_window
     )
 
-    # Conditionally run selected analyses for this single trial
-    if run_peak_force:
+    # --- Analysis Dependency Chain ---
+
+    # 1. Foundational metrics (e.g., peak force) are needed for several analyses
+    if run_peak_force or run_motor_reaction_time or run_motor_response_time:
         peak_metrics = peak_force_metrics(
             signal_df=trial_segment_df,
             stim_time=base_metrics['stim_time'],
@@ -992,9 +1019,31 @@ def update_trial_data(
         # Merge the new metrics into the main dictionary
         base_metrics.update(peak_metrics)
 
-    base_metrics['block_trial_str'] = f"Block {selected_block}, Trial {selected_trial}"
-    fig = create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, base_metrics)
+    # 2. Run dependent metrics
+    if run_motor_response_time:
+        if all(k in base_metrics for k in ['time_to_peak', 'peak_force']):
+            mrspt_val = motor_response_time(
+                signal_df=trial_segment_df,
+                stim_time=base_metrics['stim_time'],
+                peak_time=base_metrics['stim_time'] + base_metrics['time_to_peak'],
+                peak_force=base_metrics['peak_force'],
+                threshold=base_metrics['threshold'],
+                response_hand=base_metrics['response_hand']
+            )
+            base_metrics['motor_response_time'] = mrspt_val
+    
+    if run_motor_reaction_time:
+        # Placeholder for when we define what "Motor Reaction Time" is
+        pass
 
+    # --- Plotting and display logic ---
+    base_metrics['block_trial_str'] = f"Block {selected_block}, Trial {selected_trial}"
+    fig = create_trial_figure(
+        trial_segment_df, channel_map, mvc_left, mvc_right, base_metrics,
+        run_peak_force=run_peak_force, 
+        run_motor_response_time=run_motor_response_time
+    )
+    
     metrics_layout = dbc.Card(dbc.CardBody([
         html.P(f"{key.replace('_', ' ').title()}: {value}")
         for key, value in base_metrics.items() if key != 'block_trial_str'
@@ -1019,11 +1068,15 @@ def update_trial_data(
     State('mvc-right-store', 'data'),
     State('current-stim-time-store', 'data'),
     State('current-trial-metrics-store', 'data'),
+    # Add states for the analysis checkboxes
+    State('analysis-peak-force-checkbox', 'value'),
+    State('analysis-mrt-checkbox', 'value'),
     prevent_initial_call=True
 )
 def update_graph_view(
     pre_window, post_window, session_id, channel_map, 
-    mvc_left, mvc_right, stim_time, trial_metrics
+    mvc_left, mvc_right, stim_time, trial_metrics,
+    run_peak_force, run_motor_response_time
 ):
     """
     This callback runs the "Partial Update" when the view window changes.
@@ -1045,8 +1098,12 @@ def update_graph_view(
         post_window=post_window
     )
 
-    # Call the helper function to re-create the figure with the new data slice
-    fig = create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, trial_metrics)
+    # Call the helper function with the new boolean flags
+    fig = create_trial_figure(
+        trial_segment_df, channel_map, mvc_left, mvc_right, trial_metrics,
+        run_peak_force=run_peak_force, 
+        run_motor_response_time=run_motor_response_time
+    )
     
     return fig
 

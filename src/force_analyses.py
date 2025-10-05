@@ -1,6 +1,63 @@
 # src/force_analyses.py
+# Standard Library Imports
+from typing import Optional
+# Third-party dependencies
 import pandas as pd
 import numpy as np
+
+
+def motor_response_time(
+    signal_df: pd.DataFrame,
+    stim_time: float,
+    peak_time: float,
+    peak_force: float,
+    threshold: float,
+    response_hand: str
+) -> Optional[int]:
+    """
+    Computes motor response time (force onset to peak force).
+
+    Finds the last time point at or below the force threshold before the peak.
+
+    Args:
+        signal_df: DataFrame of the trial segment.
+        stim_time: Stimulus onset time (s).
+        peak_time: Time of peak force (s), pre-calculated.
+        peak_force: Value of peak force (N), pre-calculated.
+        threshold: Force threshold (N), pre-calculated.
+        response_hand: "left" or "right".
+
+    Returns:
+        Motor response time in milliseconds, or None if not found.
+    """
+    if response_hand not in ['left', 'right'] or threshold is None:
+        return None
+
+    force_col = f"force_{response_hand}"
+
+    # Early exit if the peak force never even reached the threshold
+    if peak_force < threshold:
+        return None
+
+    # Filter the signal to the window between stimulus and peak force
+    response_window_df = signal_df[
+        (signal_df['time'] >= stim_time) & (signal_df['time'] <= peak_time)
+    ]
+    
+    # Find all points at or below the threshold within that window
+    onset_candidates = response_window_df[response_window_df[force_col] <= threshold]
+
+    if onset_candidates.empty:
+        return None # Should not happen if peak > threshold, but a safe check
+
+    # The force onset is the last time point (max time) at or below the threshold
+    force_onset_time = onset_candidates['time'].max()
+    
+    # Calculate duration in milliseconds
+    mrspt_ms = int(round((force_onset_time - stim_time) * 1000))
+
+    return mrspt_ms
+
 
 def peak_force_metrics(
         signal_df: pd.DataFrame,

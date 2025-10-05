@@ -25,24 +25,24 @@ def test_peak_force_metrics(
     # Generate mock data for the specific test case ---
     mvc_val = 200.0
     mock_df, expected = mock_signal_data_factory(
-        dominant_force=dominant_hand,
-        motor_condition=motor_condition,
-        overshoot=overshoot,
-        mvc=mvc_val,
+        dominant_force = dominant_hand,
+        motor_condition = motor_condition,
+        overshoot = overshoot,
+        mvc = mvc_val,
         # Use standard column names as the function expects them
-        force_r_col_name="force_right",
-        force_l_col_name="force_left",
-        include_emg=False
+        force_r_col_name = "force_right",
+        force_l_col_name = "force_left",
+        include_emg = False
     )
 
     # Call the function under test ---
     results = peak_force_metrics(
-        signal_df=mock_df,
-        stim_time=expected['stim_time_exact'],
-        response_hand=dominant_hand,
-        threshold=expected['expected_threshold'],
-        mvc_left=mvc_val,
-        mvc_right=mvc_val
+        signal_df = mock_df,
+        stim_time = expected['stim_time_exact'],
+        response_hand = dominant_hand,
+        threshold = expected['expected_threshold'],
+        mvc_left = mvc_val,
+        mvc_right = mvc_val
     )
 
     # Assertions

@@ -31,14 +31,14 @@ def test_get_trial_data_and_metrics_integration(mock_trial_lookup):
     
     # Create mock raw data with custom column names and a "left" dominant force
     mock_force_df, expected_metrics = create_mock_signal_data(
-        stim_time_within_segment=stim_time_val,
-        dominant_force="left", # To test that response_hand is correctly identified
-        motor_condition="high",
-        mvc=mvc_l_val, # MVC for the dominant hand
-        force_r_col_name="OriginalForceR",
-        force_l_col_name="OriginalForceL",
-        emg_r_col_name="OriginalEMGR",
-        emg_l_col_name="OriginalEMGL"
+        stim_time_within_segment = stim_time_val,
+        dominant_force = "left", # To test that response_hand is correctly identified
+        motor_condition = "high",
+        mvc = mvc_l_val, # MVC for the dominant hand
+        force_r_col_name = "OriginalForceR",
+        force_l_col_name = "OriginalForceL",
+        emg_r_col_name = "OriginalEMGR",
+        emg_l_col_name = "OriginalEMGL"
     )
     
     # Define the mapping from standard names to the file's custom names
@@ -57,15 +57,15 @@ def test_get_trial_data_and_metrics_integration(mock_trial_lookup):
 
     # Call the function under test ---
     trial_segment_df, trial_metrics = get_trial_data_and_metrics(
-        full_df=mock_force_df,
-        trial_lookup=mock_trial_lookup,
-        condition_data=custom_condition_data, # Use the custom data
-        trial_index=1, # Test the first global trial
-        channel_map=channel_map,
-        mvc_left=mvc_l_val,
-        mvc_right=mvc_r_val,
-        pre_window=pre_window_val,
-        post_window=post_window_val
+        full_df = mock_force_df,
+        trial_lookup = mock_trial_lookup,
+        condition_data = custom_condition_data, # Use the custom data
+        trial_index = 1, # Test the first global trial
+        channel_map = channel_map,
+        mvc_left = mvc_l_val,
+        mvc_right = mvc_r_val,
+        pre_window = pre_window_val,
+        post_window = post_window_val
     )
 
     # 1. Check the returned types
