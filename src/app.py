@@ -106,9 +106,9 @@ def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, tria
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], 
                                 name='Left Hand', legendgroup='left', line=dict(color=COLOR_L)), row=1, col=1)
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col], 
-                                name='EMG Right', legendgroup='right', showlegend=False, line=dict(color=COLOR_R)), row=2, col=1)
+                                name='EMG Right', legendgroup='right', showlegend=False, line=dict(width = 0.5, color=COLOR_R)), row=2, col=1)
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], 
-                                name='EMG Left', legendgroup='left', showlegend=False, line=dict(color=COLOR_L)), row=2, col=1)
+                                name='EMG Left', legendgroup='left', showlegend=False, line=dict(width = 0.5, color=COLOR_L)), row=2, col=1)
         fig.update_yaxes(title_text="EMG", row=2, col=1)
     else:
         fig = make_subplots(rows=1, cols=1)
@@ -119,39 +119,33 @@ def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, tria
 
     fig.update_yaxes(title_text="Force", range=[0, max_mvc], row=1, col=1)
     
-    # --- Horizontal dashline for the threshold ---
     if threshold_value is not None:
         fig.add_hline(y=threshold_value, line_dash="dash", line_color="grey", row=1, col=1)
 
-    # Add visualizations if peak force metrics are available ---
     peak_force = trial_metrics.get('peak_force')
     time_to_peak = trial_metrics.get('time_to_peak')
     stim_time = trial_metrics.get('stim_time')
 
-    # Check if all the necessary values exist to draw the lines
     if all(v is not None for v in [peak_force, time_to_peak, stim_time, threshold_value]):
         peak_time = stim_time + time_to_peak
-        
-        # 1. Add a marker for the peak force
+
         fig.add_trace(go.Scatter(
-            x=[peak_time],
-            y=[peak_force],
-            mode='markers',
-            marker=dict(color='red', size=10, symbol='x'),
-            name='Peak Force',
+            x=[peak_time, peak_time], y=[threshold_value, peak_force],
+            mode='lines', line=dict(color='purple', dash='dash', width=1),
             showlegend=False
         ), row=1, col=1)
-
-        # 2. Add the vertical dashline between the peak and the threshold
-        fig.add_trace(go.Scatter(
-            x=[peak_time, peak_time],
-            y=[threshold_value, peak_force],
-            mode='lines',
-            line=dict(color='red', dash='dash', width=1),
-            showlegend=False
-        ), row=1, col=1)
-
-    fig.update_layout(title=selected_trial, margin=dict(t=30, b=0, l=0, r=0))
+    
+    fig.update_layout(
+        title=selected_trial, 
+        margin=dict(t=30, b=0, l=0, r=0),
+        legend=dict(
+            yanchor="top",
+            y=0.98,
+            xanchor="right",
+            x=0.98,
+            bgcolor="rgba(255, 255, 255, 0)" # Semi-transparent background
+        )
+    )
     
     return fig
 
@@ -324,45 +318,63 @@ app.layout = dbc.Container([
             label="Trial Viewer",
             children=[
                 html.Div([
+                    # --- Section 1: Trial Controls ---
+                    html.H4("Trial Controls", className="mt-3"),
                     dbc.Row([
                         dbc.Col([
-                            html.H4("Trial Controls", className="mt-3"),
-                            dbc.Row([
-                                dbc.Col([
-                                    dbc.Label("Select Block:"),
-                                    dcc.Dropdown(id='block-selector-dropdown')
-                                ], width=6),
-                                dbc.Col([
-                                    dbc.Label("Select Trial:"),
-                                    dbc.InputGroup([
-                                        dbc.Button(
-                                            html.I(className="fas fa-chevron-left"),
-                                            id='prev-trial-button', n_clicks=0, color="secondary", outline=True
-                                        ),
-                                        dcc.Dropdown(id='trial-selector-dropdown', style={'flex': '1'}),
-                                        dbc.Button(
-                                            html.I(className="fas fa-chevron-right"),
-                                            id='next-trial-button', n_clicks=0, color="secondary", outline=True
-                                        )
-                                    ])
-                                ], width=6)
-                            ]),
-                            dbc.Label("Pre-Stimulus Window (s):", className="mt-3"),
+                            dbc.Label("Select Block:"),
+                            dcc.Dropdown(id='block-selector-dropdown')
+                        ], width=6, lg=4), # Takes less space on large screens
+                        dbc.Col([
+                            dbc.Label("Select Trial:"),
+                            dbc.InputGroup([
+                                dbc.Button(
+                                    html.I(className="fas fa-chevron-left"),
+                                    id='prev-trial-button', n_clicks=0, color="secondary", outline=True
+                                ),
+                                dcc.Dropdown(id='trial-selector-dropdown', style={'flex': '1'}),
+                                dbc.Button(
+                                    html.I(className="fas fa-chevron-right"),
+                                    id='next-trial-button', n_clicks=0, color="secondary", outline=True
+                                )
+                            ])
+                        ], width=6, lg=4)
+                    ]),
+
+                    html.Hr(),
+
+                    # --- Section 2: View Parameters ---
+                    html.H4("View Parameters", className="mt-3"),
+                    dbc.Row([
+                         dbc.Col([
+                            dbc.Label("Pre-Stimulus Window (s):"),
                             dbc.Input(id='pre-stim-window-input', type='number', value=0.125, step=0.05),
-                    
-                            dbc.Label("Post-Stimulus Window (s):", className="mt-3"),
+                         ], width=6, lg=4),
+                         dbc.Col([
+                            dbc.Label("Post-Stimulus Window (s):"),
                             dbc.Input(id='post-stim-window-input', type='number', value=1.25, step=0.05),
-                            
-                            html.Hr(),
-                            
+                         ], width=6, lg=4)
+                    ]),
+                    
+                    html.Hr(),
+
+                    # --- Section 3: Trial Plot (now full-width) ---
+                    dbc.Row([
+                        dbc.Col([
+                            dcc.Graph(id='trial-graph', style={'height': '40vh'})
+                        ], width=12) 
+                    ]),
+
+                    html.Hr(),
+
+                    # --- Section 4: Trial Metrics (now full-width) ---
+                    dbc.Row([
+                        dbc.Col([
                             html.H4("Trial Metrics"),
                             html.Div(id='trial-metrics-display'), 
-                        ], width=4),
-                        
-                        dbc.Col([
-                            dcc.Graph(id='trial-graph', style={'height': '80vh'})
-                        ], width=8)
+                        ], width=12)
                     ])
+
                 ], className="p-3")
             ]
         ),
