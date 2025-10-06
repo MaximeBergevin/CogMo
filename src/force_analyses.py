@@ -6,6 +6,71 @@ import pandas as pd
 import numpy as np
 
 
+def find_baseline_force(
+    signal_df: pd.DataFrame,
+    peak_time: float,
+    response_hand: str
+) -> Optional[float]:
+    """
+    Computes baseline force using an iterative, drift-correcting pre-peak window.
+
+    Searches 50ms windows before the peak, shifting earlier or later based on
+    signal drift, until a stable window (SD <= 1.0) is found, then returns
+    the mean force of that window.
+
+    Args:
+        signal_df: DataFrame of the trial segment.
+        peak_time: Time of peak force (s), pre-calculated.
+        response_hand: "left" or "right".
+
+    Returns:
+        The baseline force value, or None if not found.
+    """
+    force_col = f"force_{response_hand}"
+
+    # Initialize 50 ms window starting 250ms before the peak
+    baseline_start = peak_time - 0.250
+    baseline_end = baseline_start + 0.050
+    shift_s = 0.050  # 50 ms
+    max_iter = 10
+
+    for _ in range(max_iter):
+        # Ensure the window does not go before the start of the signal
+        if baseline_start < signal_df['time'].min():
+            break
+
+        baseline_df = signal_df[
+            (signal_df['time'] >= baseline_start) & (signal_df['time'] < baseline_end)
+        ]
+
+        if len(baseline_df) < 2: # Need at least 2 points for std dev
+            break
+
+        baseline_sd = baseline_df[force_col].std()
+
+        if baseline_sd <= 1.0:
+            # Stable baseline found, return its mean
+            return baseline_df[force_col].mean()
+
+        # Check for drift and shift the window in the opposite direction
+        half_idx = len(baseline_df) // 2
+        early_mean = baseline_df[force_col].iloc[:half_idx].mean()
+        late_mean = baseline_df[force_col].iloc[half_idx:].mean()
+
+        if late_mean > early_mean:
+            # Drift is upward, so the contraction might be starting. Shift earlier.
+            baseline_start -= shift_s
+            baseline_end -= shift_s
+        else:
+            # Drift is downward or stable. Shift later to get closer to onset.
+            baseline_start += shift_s
+            baseline_end += shift_s
+            
+    # If the loop finishes without finding a stable baseline
+    return None
+
+
+
 def find_contraction_offset(
     signal_df: pd.DataFrame,
     peak_time: float,
@@ -38,11 +103,8 @@ def find_contraction_offset(
     shift_s = 0.050  # 50 ms
     max_iter = 10
     threshold = None
-    print(f"\n--- Debugging find_contraction_offset ---")
-    print(f"Peak Time: {peak_time:.3f}, Peak Value: {peak_value:.2f}, Relative Guard: {relative_guard:.2f}")
 
-    
-    for i in range(max_iter):
+    for _ in range(max_iter):
         if baseline_start > signal_df['time'].max():
             break # Stop if we run out of data
 
@@ -58,7 +120,6 @@ def find_contraction_offset(
 
         baseline_mean = baseline_df[force_col].mean()
         baseline_sd = baseline_df[force_col].std()
-        print(f"Iter {i}: Window [{baseline_start:.3f}s - {baseline_end:.3f}s] -> Mean={baseline_mean:.2f}, SD={baseline_sd:.2f}")
         
         # A baseline is stable if its SD is low AND its mean is low relative to the peak
         if baseline_sd <= 1.0 and baseline_mean <= relative_guard:
@@ -81,8 +142,7 @@ def find_contraction_offset(
 
     # Return the time of the first occurrence
     offset_time = offset_candidates['time'].iloc[0]
-    print(f"Offset found at time: {offset_time:.3f}")
-    print("--- End Debug ---")
+
     return offset_time
 
 
