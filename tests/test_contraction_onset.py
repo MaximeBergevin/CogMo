@@ -25,18 +25,18 @@ def test_find_contraction_onset(
     """
     # Generate mock data for the specific test case
     mock_df, expected = mock_signal_data_factory(
-        dominant_force="right",
-        motor_condition="high",
-        max_noise=max_noise,
-        delay_s=delay_s,
-        burst_time_s=1.0 # Use a longer burst for the 'false start' case
+        dominant_force = "right",
+        motor_condition = "high",
+        max_noise = max_noise,
+        delay_s = delay_s,
+        burst_time_s = 1.0 # Use a longer burst for the 'false start' case
     )
     
     # Call the function under test
     result_onset_time = find_contraction_onset(
-        signal_df=mock_df,
-        stim_time=expected['stim_time_exact'],
-        peak_time=expected['expected_peak_time'],
+        signal_df = mock_df,
+        stim_time = expected['stim_time_exact'],
+        peak_time = expected['expected_peak_time'],
         response_hand="right"
     )
 

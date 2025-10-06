@@ -6,6 +6,86 @@ import pandas as pd
 import numpy as np
 
 
+def find_contraction_offset(
+    signal_df: pd.DataFrame,
+    peak_time: float,
+    peak_value: float,
+    response_hand: str
+) -> Optional[float]:
+    """
+    Computes contraction offset time based on a stable post-peak baseline.
+
+    Finds a stable 50ms post-peak window, sets a threshold (mean + 3*SD),
+    and returns the first time point after the peak where force falls below it.
+
+    Args:
+        signal_df: DataFrame of the trial segment.
+        peak_time: Time of peak force (s), pre-calculated.
+        peak_value: Value of peak force (N), pre-calculated.
+        response_hand: "left" or "right".
+
+    Returns:
+        The time (in seconds) of contraction offset, or None if not detected.
+    """
+    force_col = f"force_{response_hand}"
+
+    # Guard condition to avoid issues if peak force is very low
+    relative_guard = 0.20 * abs(peak_value)
+    
+    # --- Iteratively search for a stable post-peak baseline window ---
+    baseline_start = peak_time + 0.150
+    baseline_end = baseline_start + 0.050
+    shift_s = 0.050  # 50 ms
+    max_iter = 10
+    threshold = None
+    print(f"\n--- Debugging find_contraction_offset ---")
+    print(f"Peak Time: {peak_time:.3f}, Peak Value: {peak_value:.2f}, Relative Guard: {relative_guard:.2f}")
+
+    
+    for i in range(max_iter):
+        if baseline_start > signal_df['time'].max():
+            break # Stop if we run out of data
+
+        baseline_df = signal_df[
+            (signal_df['time'] >= baseline_start) & (signal_df['time'] < baseline_end)
+        ]
+        
+        if baseline_df.empty:
+            # Shift window forward and continue to the next iteration
+            baseline_start += shift_s
+            baseline_end += shift_s
+            continue
+
+        baseline_mean = baseline_df[force_col].mean()
+        baseline_sd = baseline_df[force_col].std()
+        print(f"Iter {i}: Window [{baseline_start:.3f}s - {baseline_end:.3f}s] -> Mean={baseline_mean:.2f}, SD={baseline_sd:.2f}")
+        
+        # A baseline is stable if its SD is low AND its mean is low relative to the peak
+        if baseline_sd <= 1.0 and baseline_mean <= relative_guard:
+            threshold = baseline_mean + (3 * baseline_sd)
+            break # Stable baseline found
+
+        # If not stable, just move the window forward for the next iteration
+        baseline_start += shift_s
+        baseline_end += shift_s
+    
+    if threshold is None:
+        return None # No stable post-peak baseline was found
+
+    # --- Find the first time point after the peak that drops below the threshold ---
+    offset_window_df = signal_df[signal_df['time'] >= peak_time]
+    offset_candidates = offset_window_df[offset_window_df[force_col] <= threshold]
+    
+    if offset_candidates.empty:
+        return None
+
+    # Return the time of the first occurrence
+    offset_time = offset_candidates['time'].iloc[0]
+    print(f"Offset found at time: {offset_time:.3f}")
+    print("--- End Debug ---")
+    return offset_time
+
+
 def find_contraction_onset(
     signal_df: pd.DataFrame,
     stim_time: float,

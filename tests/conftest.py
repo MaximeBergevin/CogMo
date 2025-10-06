@@ -207,6 +207,7 @@ def create_mock_signal_data(
         "expected_peak_value": peak_force_magnitude,
         "expected_onset_time": df.loc[onset_index, 'time'] if onset_index < n_time_points else np.nan,
         "expected_peak_time": df.loc[onset_index + half - 1, 'time'] if n_points > 0 else np.nan,
+        "expected_offset_time": df.loc[end_index, 'time'] if end_index < n_time_points else np.nan,
         "expected_threshold": threshold
     }
 
