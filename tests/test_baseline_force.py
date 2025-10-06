@@ -22,18 +22,18 @@ def test_find_baseline_force(
     """
     # Generate mock data for the specific test case
     mock_df, expected = mock_signal_data_factory(
-        dominant_force="right",
-        motor_condition="high",
-        max_noise=max_noise,
-        shift_baseline=shift_baseline,
-        burst_time_s=1.0 
+        dominant_force = "right",
+        motor_condition = "high",
+        max_noise = max_noise,
+        shift_baseline = shift_baseline,
+        burst_time_s = 1.0 
     )
     
     # Call the function under test
     result_baseline = find_baseline_force(
-        signal_df=mock_df,
-        peak_time=expected['expected_peak_time'],
-        response_hand="right"
+        signal_df = mock_df,
+        peak_time = expected['expected_peak_time'],
+        response_hand = "right"
     )
 
     # --- Assertions ---

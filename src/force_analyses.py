@@ -1,9 +1,65 @@
 # src/force_analyses.py
 # Standard Library Imports
-from typing import Optional
+from typing import Optional, Dict, Any
 # Third-party dependencies
 import pandas as pd
 import numpy as np
+
+
+def calculate_impulse(
+    signal_df: pd.DataFrame,
+    onset_time: Optional[float],
+    offset_time: Optional[float],
+    baseline_force: Optional[float],
+    mvc_value: Optional[float],
+    response_hand: str
+) -> Dict[str, Any]:
+    """
+    Computes impulse (Force/Torque-Time Integral) over the contraction period.
+
+    Uses pre-calculated onset/offset times to bound the contraction, subtracts
+    the pre-calculated baseline, then integrates using the trapezoidal rule.
+
+    Args:
+        signal_df: DataFrame of the trial segment.
+        onset_time: The time of force/contraction onset (s).
+        offset_time: The time of force/contraction offset (s).
+        baseline_force: The baseline force/torque value to subtract (N or N.m).
+        mvc_value: The MVC value for normalization (%MVC).
+        response_hand: "left" or "right".
+
+    Returns:
+        A dictionary containing the impulse ('auc') and its normalized value.
+    """
+    force_col = f"force_{response_hand}"
+
+    # Guard clause: Ensure all necessary time points are valid
+    if (onset_time is None or offset_time is None or baseline_force is None or
+            offset_time <= onset_time):
+        return {'impulse_auc': None, 'impulse_auc_percent_mvc': None}
+
+    # Slice the DataFrame to the exact contraction window
+    contraction_df = signal_df[
+        (signal_df['time'] >= onset_time) & (signal_df['time'] <= offset_time)
+    ].copy()
+
+    # Subtract the baseline force to rectify the signal
+    contraction_df['force_corrected'] = contraction_df[force_col] - baseline_force
+    
+    # Calculate Area Under the Curve (Impulse) using NumPy's trapezoidal rule
+    impulse_auc = np.trapezoid(y=contraction_df['force_corrected'], x=contraction_df['time'])
+    
+    # Normalization
+    contraction_duration = offset_time - onset_time
+    impulse_auc_percent_mvc = None
+    if mvc_value and mvc_value > 0 and contraction_duration > 0:
+        # This normalization represents the mean force over the contraction as a % of MVC
+        impulse_auc_percent_mvc = (impulse_auc / contraction_duration) / mvc_value * 100
+
+    return {
+        'impulse_auc': impulse_auc,
+        'impulse_auc_percent_mvc': impulse_auc_percent_mvc
+    }
 
 
 def find_baseline_force(

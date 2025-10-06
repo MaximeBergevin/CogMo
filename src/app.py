@@ -38,7 +38,7 @@ import webview
 from get_condition_lookup import get_condition_lookup
 from data_loader import load_signal, find_best_match
 from trial_segmentation import get_trial_data_and_metrics, get_trial_segment, create_trial_lookup
-from force_analyses import find_contraction_onset, motor_reaction_time, motor_response_time, peak_force_metrics
+from force_analyses import calculate_impulse, find_baseline_force, find_contraction_offset, find_contraction_onset, motor_reaction_time, motor_response_time, peak_force_metrics
 
 # DEPENDENCIES FILE MANAGEMENT:
 # Requirements.in & requirements.txt (Windows & MacOS)
@@ -84,9 +84,13 @@ ERROR_UPLOAD_STYLE['borderColor'] = 'red'
 # --- HELPER FUNCTIONS ---
 # ==============================================================================
 
-def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, trial_metrics,
-                        run_peak_force: bool = False, run_motor_response_time: bool = False,
-                        run_motor_reaction_time: bool = False):
+def create_trial_figure(
+    trial_segment_df, channel_map, mvc_left, mvc_right, trial_metrics,
+    run_peak_force: bool = False,
+    run_motor_response_time: bool = False,
+    run_motor_reaction_time: bool = False,
+    run_force_time_integral: bool = False
+):
     """Creates the Plotly figure for the trial viewer, with conditional visualizations."""
     time_col = channel_map.get('time')
     force_r_col = channel_map.get('force_right')
@@ -109,9 +113,9 @@ def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, tria
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col],
                                 name='Left Hand', legendgroup='left', line=dict(color=COLOR_L)), row=1, col=1)
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col],
-                                name='EMG Right', legendgroup='right', showlegend=False, line=dict(width = 0.5, color=COLOR_R)), row=2, col=1)
+                                name='EMG Right', legendgroup='right', showlegend=False, line=dict(width=0.5, color=COLOR_R)), row=2, col=1)
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col],
-                                name='EMG Left', legendgroup='left', showlegend=False, line=dict(width = 0.5, color=COLOR_L)), row=2, col=1)
+                                name='EMG Left', legendgroup='left', showlegend=False, line=dict(width=0.5, color=COLOR_L)), row=2, col=1)
         fig.update_yaxes(title_text="EMG", row=2, col=1)
     else:
         fig = make_subplots(rows=1, cols=1)
@@ -124,6 +128,28 @@ def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, tria
 
     if threshold_value is not None:
         fig.add_hline(y=threshold_value, line_dash="dash", line_color="grey", row=1, col=1)
+
+    # --- Visualization for Impulse (AUC) ---
+    if run_force_time_integral and all(k in trial_metrics for k in ['force_onset_time', 'force_offset_time', 'baseline_force']):
+        onset_time = trial_metrics['force_onset_time']
+        offset_time = trial_metrics['force_offset_time']
+        baseline_force = trial_metrics['baseline_force']
+        response_hand = trial_metrics.get('response_hand')
+        force_col = f"force_{response_hand}"
+        
+        auc_df = trial_segment_df[
+            (trial_segment_df['time'] >= onset_time) & (trial_segment_df['time'] <= offset_time)
+        ].copy()
+        
+        fig.add_trace(go.Scatter(
+            x=auc_df[time_col],
+            y=auc_df[force_col] - baseline_force,
+            fill='tozeroy',
+            mode='none',
+            fillcolor='rgba(40, 167, 69, 0.3)',
+            showlegend=False,
+            name='Impulse (AUC)'
+        ), row=1, col=1)
 
     # --- Visualization for Peak Force ---
     peak_force = trial_metrics.get('peak_force')
@@ -145,7 +171,7 @@ def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, tria
             y=[0, threshold_value],
             mode='lines',
             line=dict(color='orange', dash='dash', width=1),
-            name='Force Onset',
+            name='Force Onset (MRT)',
             showlegend=False
         ), row=1, col=1)
 
@@ -158,10 +184,9 @@ def create_trial_figure(trial_segment_df, channel_map, mvc_left, mvc_right, tria
             y=[0, threshold_value],
             mode='lines',
             line=dict(color='green', dash='dash', width=1),
-            name='Force Onset',
+            name='Force Onset (MRsT)',
             showlegend=False
         ), row=1, col=1)
-
         
     # --- Layout with Stimulus Arrow Annotation ---
     annotations = []
@@ -979,13 +1004,14 @@ def handle_trial_navigation(
     # Analysis States
     State('analysis-peak-force-checkbox', 'value'),
     State('analysis-mrspt-checkbox', 'value'),
-    State('analysis-mrt-checkbox', 'value')    
+    State('analysis-mrt-checkbox', 'value'),
+    State('analysis-fti-checkbox', 'value')    
 )
 def update_trial_data(
     selected_block, selected_trial, condition_data_dict, session_id,
     channel_map, trial_lookup_dict, pre_window, post_window,
     mvc_left, mvc_right,
-    run_peak_force, run_motor_response_time, run_motor_reaction_time
+    run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral
 ):
     """
     This callback runs a "Full Update" when the selected trial changes,
@@ -1022,10 +1048,8 @@ def update_trial_data(
     # --- Analysis Dependency Chain ---
     # ----------------------------------
 
-    # 1. Foundational metrics that are needed for several analyses
-    if run_peak_force or run_motor_reaction_time or run_motor_response_time:
-        
-        # Calculate peak metrics (needed by almost everything)
+     # 1. Calculate Foundational Metrics if needed
+    if run_peak_force or run_motor_reaction_time or run_motor_response_time or run_force_time_integral:
         peak_metrics = peak_force_metrics(
             signal_df=trial_segment_df,
             stim_time=base_metrics['stim_time'],
@@ -1036,26 +1060,42 @@ def update_trial_data(
         )
         base_metrics.update(peak_metrics)
         
-        # Calculate onset time (as it is also foundational for many metrics)
-        # This check ensures we have the peak_time needed by find_contraction_onset
         if 'time_to_peak' in base_metrics:
-            onset_time = find_contraction_onset(
-                signal_df=trial_segment_df,
-                stim_time=base_metrics['stim_time'],
-                peak_time=base_metrics['stim_time'] + base_metrics['time_to_peak'],
-                response_hand=base_metrics['response_hand']
-            )
-            # Store the raw onset time so other functions can reuse it
-            base_metrics['force_onset_time'] = onset_time
+            peak_time = base_metrics['stim_time'] + base_metrics['time_to_peak']
+            
+            if run_motor_reaction_time or run_force_time_integral:
+                onset_time = find_contraction_onset(
+                    signal_df=trial_segment_df,
+                    stim_time=base_metrics['stim_time'],
+                    peak_time=peak_time,
+                    response_hand=base_metrics['response_hand']
+                )
+                base_metrics['force_onset_time'] = onset_time
 
-    # 2. Run dependent metrics
+            if run_force_time_integral:
+                offset_time = find_contraction_offset(
+                    signal_df=trial_segment_df,
+                    peak_time=peak_time,
+                    peak_value=base_metrics['peak_force'],
+                    response_hand=base_metrics['response_hand']
+                )
+                base_metrics['force_offset_time'] = offset_time
+                
+                baseline = find_baseline_force(
+                    signal_df=trial_segment_df,
+                    peak_time=peak_time,
+                    response_hand=base_metrics['response_hand']
+                )
+                base_metrics['baseline_force'] = baseline
+
+    # 2. Calculate Final "Leaf" Metrics
     if run_motor_reaction_time:
         mrt_val = motor_reaction_time(
             stim_time=base_metrics.get('stim_time'),
-            onset_time=base_metrics.get('force_onset_time') # REUSE
+            onset_time=base_metrics.get('force_onset_time')
         )
         base_metrics['motor_reaction_time'] = mrt_val
-
+    
     if run_motor_response_time:
         if all(k in base_metrics for k in ['time_to_peak', 'peak_force']):
             mrspt_val = motor_response_time(
@@ -1067,6 +1107,20 @@ def update_trial_data(
                 response_hand=base_metrics['response_hand']
             )
             base_metrics['motor_response_time'] = mrspt_val
+            
+    if run_force_time_integral:
+        if all(k in base_metrics for k in ['force_onset_time', 'force_offset_time', 'baseline_force']):
+            mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
+            
+            impulse_metrics = calculate_impulse(
+                signal_df=trial_segment_df,
+                onset_time=base_metrics.get('force_onset_time'),
+                offset_time=base_metrics.get('force_offset_time'),
+                baseline_force=base_metrics.get('baseline_force'),
+                mvc_value=mvc_val,
+                response_hand=base_metrics.get('response_hand')
+            )
+            base_metrics.update(impulse_metrics)
  
 
     # --- Plotting and display logic ---
@@ -1075,7 +1129,8 @@ def update_trial_data(
         trial_segment_df, channel_map, mvc_left, mvc_right, base_metrics,
         run_peak_force=run_peak_force, 
         run_motor_response_time=run_motor_response_time,
-        run_motor_reaction_time=run_motor_reaction_time
+        run_motor_reaction_time=run_motor_reaction_time,
+        run_force_time_integral=run_force_time_integral
     )
     
     metrics_layout = dbc.Card(dbc.CardBody([
@@ -1106,12 +1161,13 @@ def update_trial_data(
     State('analysis-peak-force-checkbox', 'value'),
     State('analysis-mrspt-checkbox', 'value'),
     State('analysis-mrt-checkbox', 'value'),
+    State('analysis-fti-checkbox', 'value'),
     prevent_initial_call=True
 )
 def update_graph_view(
     pre_window, post_window, session_id, channel_map, 
     mvc_left, mvc_right, stim_time, trial_metrics,
-    run_peak_force, run_motor_response_time, run_motor_reaction_time
+    run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral
 ):
     """
     This callback runs the "Partial Update" when the view window changes.
@@ -1138,7 +1194,8 @@ def update_graph_view(
         trial_segment_df, channel_map, mvc_left, mvc_right, trial_metrics,
         run_peak_force=run_peak_force, 
         run_motor_response_time=run_motor_response_time,
-        run_motor_reaction_time=run_motor_reaction_time
+        run_motor_reaction_time=run_motor_reaction_time,
+        run_force_time_integral=run_force_time_integral
     )
     
     return fig

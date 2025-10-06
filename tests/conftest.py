@@ -199,6 +199,15 @@ def create_mock_signal_data(
         df.loc[burst_indices, dominant_col] = burst_vals
         df[dominant_col] += shift_baseline
 
+    # Calculate ground truth for AUC
+    expected_auc = 0
+    expected_auc_normalized = 0
+    if len(burst_vals) > 1:
+        expected_auc = np.trapezoid(y=burst_vals, dx=time_increment)
+        contraction_duration = burst_time_s
+        if mvc > 0 and contraction_duration > 0:
+            expected_auc_normalized = (expected_auc / contraction_duration) / mvc * 100
+
     # Calculate 'ground truth' metrics for testing
     # ---------------------------------------------
     expected_metrics = {
@@ -208,7 +217,9 @@ def create_mock_signal_data(
         "expected_onset_time": df.loc[onset_index, 'time'] if onset_index < n_time_points else np.nan,
         "expected_peak_time": df.loc[onset_index + half - 1, 'time'] if n_points > 0 else np.nan,
         "expected_offset_time": df.loc[end_index, 'time'] if end_index < n_time_points else np.nan,
-        "expected_threshold": threshold
+        "expected_threshold": threshold,
+        "expected_auc": expected_auc,
+        "expected_auc_normalized": expected_auc_normalized
     }
 
     return df, expected_metrics
