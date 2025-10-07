@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any
 # Third-party dependencies
 import pandas as pd
 import numpy as np
+from scipy import signal
 
 
 def calculate_impulse(
@@ -227,8 +228,6 @@ def find_contraction_onset(
     threshold = None
 
     for _ in range(max_iter):
-        if baseline_start < stim_time:
-            break # Stop if the window moves before the stimulus
 
         baseline_df = signal_df[
             (signal_df['time'] >= baseline_start) & (signal_df['time'] < baseline_end)

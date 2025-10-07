@@ -410,11 +410,11 @@ app.layout = dbc.Container([
                     dbc.Row([
                          dbc.Col([
                             dbc.Label("Pre-Stimulus Window (s):"),
-                            dbc.Input(id='pre-stim-window-input', type='number', value=0.125, step=0.05),
+                            dbc.Input(id='pre-stim-window-input', type='number', value=1, step=0.05),
                          ], width=6, lg=4),
                          dbc.Col([
                             dbc.Label("Post-Stimulus Window (s):"),
-                            dbc.Input(id='post-stim-window-input', type='number', value=1.25, step=0.05),
+                            dbc.Input(id='post-stim-window-input', type='number', value=2, step=0.05),
                          ], width=6, lg=4)
                     ]),
                     
