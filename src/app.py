@@ -38,7 +38,7 @@ import webview
 from get_condition_lookup import get_condition_lookup
 from data_loader import load_signal, find_best_match
 from trial_segmentation import get_trial_data_and_metrics, get_trial_segment, create_trial_lookup
-from force_analyses import calculate_impulse, find_baseline_force, find_contraction_offset, find_contraction_onset, motor_reaction_time, motor_response_time, peak_force_metrics
+import force_analyses as fa
 
 # DEPENDENCIES FILE MANAGEMENT:
 # Requirements.in & requirements.txt (Windows & MacOS)
@@ -101,57 +101,76 @@ def create_trial_figure(
 
     COLOR_R = 'blue'
     COLOR_L = 'goldenrod'
+    COLOR_GRAY = '#D3D3D3'
     max_mvc = max(mvc_left, mvc_right) if mvc_left and mvc_right else 1
     threshold_value = trial_metrics.get('threshold')
     selected_trial = trial_metrics.get('block_trial_str', 'Trial')
     stim_time = trial_metrics.get('stim_time')
 
-    if include_emg:
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col],
-                                name='Right Hand', legendgroup='right', line=dict(color=COLOR_R)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col],
-                                name='Left Hand', legendgroup='left', line=dict(color=COLOR_L)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col],
-                                name='EMG Right', legendgroup='right', showlegend=False, line=dict(width=0.5, color=COLOR_R)), row=2, col=1)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col],
-                                name='EMG Left', legendgroup='left', showlegend=False, line=dict(width=0.5, color=COLOR_L)), row=2, col=1)
-        fig.update_yaxes(title_text="EMG", row=2, col=1)
-    else:
-        fig = make_subplots(rows=1, cols=1)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col],
-                                name='Right Hand', line=dict(color=COLOR_R)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col],
-                                name='Left Hand', line=dict(color=COLOR_L)), row=1, col=1)
+    onset_time = trial_metrics.get('force_onset_time')
+    offset_time = trial_metrics.get('force_offset_time')
+    has_analyzed_segment = onset_time is not None and offset_time is not None
 
+    fig = make_subplots(rows=2 if include_emg else 1, cols=1, shared_xaxes=True, vertical_spacing=0.05)
+
+    # --- Layered Plotting Logic ---
+    if has_analyzed_segment:
+        # Define a wider window for VISUALIZATION to capture the full EMG event.
+        # Add a 200ms buffer before onset and after offset.
+        viz_start_time = onset_time - 0.200
+        viz_end_time = offset_time + 0.200
+        
+        # This is the DataFrame for the colored "event window"
+        viz_df = trial_segment_df[
+            (trial_segment_df[time_col] >= viz_start_time) & (trial_segment_df[time_col] <= viz_end_time)
+        ]
+        
+        # Layer 1: Plot full traces in gray
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], line=dict(color=COLOR_GRAY), showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], line=dict(color=COLOR_GRAY), showlegend=False), row=1, col=1)
+        
+        # Layer 2: Plot the wider "event window" in color on top
+        fig.add_trace(go.Scatter(x=viz_df[time_col], y=viz_df[force_r_col], name='Right Hand', line=dict(color=COLOR_R)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=viz_df[time_col], y=viz_df[force_l_col], name='Left Hand', line=dict(color=COLOR_L)), row=1, col=1)
+
+        if include_emg:
+            fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col], line=dict(width=0.5, color=COLOR_GRAY), showlegend=False), row=2, col=1)
+            fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], line=dict(width=0.5, color=COLOR_GRAY), showlegend=False), row=2, col=1)
+            fig.add_trace(go.Scatter(x=viz_df[time_col], y=viz_df[emg_r_col], line=dict(width=0.5, color=COLOR_R), showlegend=False), row=2, col=1)
+            fig.add_trace(go.Scatter(x=viz_df[time_col], y=viz_df[emg_l_col], line=dict(width=0.5, color=COLOR_L), showlegend=False), row=2, col=1)
+    else:
+        # Fallback to original behavior if no segment is analyzed
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], name='Right Hand', line=dict(color=COLOR_R)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], name='Left Hand', line=dict(color=COLOR_L)), row=1, col=1)
+        if include_emg:
+            fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col], name='EMG Right', showlegend=False, line=dict(width=0.5, color=COLOR_R)), row=2, col=1)
+            fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], name='EMG Left', showlegend=False, line=dict(width=0.5, color=COLOR_L)), row=2, col=1)
+
+    # --- Y-axis labels and all other visualizations ---
     fig.update_yaxes(title_text="Force", range=[0, max_mvc], row=1, col=1)
+    if include_emg:
+        fig.update_yaxes(title_text="EMG", row=2, col=1)
 
     if threshold_value is not None:
         fig.add_hline(y=threshold_value, line_dash="dash", line_color="grey", row=1, col=1)
 
     # --- Visualization for Impulse (AUC) ---
-    if run_force_time_integral and all(k in trial_metrics for k in ['force_onset_time', 'force_offset_time', 'baseline_force']):
-        onset_time = trial_metrics['force_onset_time']
-        offset_time = trial_metrics['force_offset_time']
+    if run_force_time_integral and has_analyzed_segment:
         baseline_force = trial_metrics['baseline_force']
         response_hand = trial_metrics.get('response_hand')
         force_col = f"force_{response_hand}"
         
         auc_df = trial_segment_df[
-            (trial_segment_df['time'] >= onset_time) & (trial_segment_df['time'] <= offset_time)
+            (trial_segment_df[time_col] >= onset_time) & (trial_segment_df[time_col] <= offset_time)
         ].copy()
         
         fig.add_trace(go.Scatter(
-            x=auc_df[time_col],
-            y=auc_df[force_col] - baseline_force,
-            fill='tozeroy',
-            mode='none',
-            fillcolor='rgba(40, 167, 69, 0.3)',
-            showlegend=False,
-            name='Impulse (AUC)'
+            x=auc_df[time_col], y=auc_df[force_col] - baseline_force,
+            fill='tozeroy', mode='none', fillcolor='rgba(40, 167, 69, 0.3)',
+            showlegend=False, name='Impulse (AUC)'
         ), row=1, col=1)
 
-    # --- Visualization for Peak Force ---
+    # --- All other markers and annotations ---
     peak_force = trial_metrics.get('peak_force')
     time_to_peak = trial_metrics.get('time_to_peak')
     if run_peak_force and all(v is not None for v in [peak_force, time_to_peak, stim_time, threshold_value]):
@@ -162,7 +181,6 @@ def create_trial_figure(
             showlegend=False
         ), row=1, col=1)
 
-    # --- Visualization for Motor Reaction Time ---
     mrt = trial_metrics.get('motor_reaction_time')
     if run_motor_reaction_time and all(v is not None for v in [mrt, stim_time, threshold_value]):
         force_onset_time = stim_time + (mrt / 1000.0)
@@ -175,7 +193,6 @@ def create_trial_figure(
             showlegend=False
         ), row=1, col=1)
 
-    # --- Visualization for Motor Response Time ---
     mrspt = trial_metrics.get('motor_response_time')
     if run_motor_response_time and all(v is not None for v in [mrspt, stim_time, threshold_value]):
         force_onset_time = stim_time + (mrspt / 1000.0)
@@ -188,7 +205,6 @@ def create_trial_figure(
             showlegend=False
         ), row=1, col=1)
         
-    # --- Layout with Stimulus Arrow Annotation ---
     annotations = []
     if stim_time is not None:
         annotations.append(
@@ -210,6 +226,7 @@ def create_trial_figure(
     )
     
     return fig
+
 
 # ==============================================================================
 # --- APP LAYOUT (UI) ---
@@ -359,6 +376,31 @@ app.layout = dbc.Container([
                             html.H6("EMG Activity", className="mt-4"),
                             dbc.Checkbox(id="analysis-rms-checkbox", label="Root Mean Square (RMS)"),
                         ], width=6),
+                    ]),
+
+                    # --- Peak Detection Settings ---
+                    html.H4("Peak Detection Settings"),
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label("Min. Valid Reaction Time (s)"),
+                            dbc.Input(id="min-valid-rt-input", type="number", value=0.250, step=0.01),
+                            dbc.Tooltip("The earliest a peak can occur after the stimulus to be considered a valid response.", target="min-valid-rt-input"),
+                        ], width=6, md=3),
+                        dbc.Col([
+                            dbc.Label("Min. Peak Prominence (N)"),
+                            dbc.Input(id="min-prominence-input", type="number", value=5, step=1),
+                            dbc.Tooltip("How much a peak must 'stick out' from the surrounding signal to be considered a new event.", target="min-prominence-input"),
+                        ], width=6, md=3),
+                        dbc.Col([
+                            dbc.Label("Pre-Stimulus Search (s)"),
+                            dbc.Input(id="pre-stim-search-input", type="number", value=1.0, step=0.1),
+                            dbc.Tooltip("How far before the stimulus to look for peaks.", target="pre-stim-search-input"),
+                        ], width=6, md=3),
+                        dbc.Col([
+                            dbc.Label("Post-Stimulus Search (s)"),
+                            dbc.Input(id="post-stim-search-input", type="number", value=2.0, step=0.1),
+                             dbc.Tooltip("How far after the stimulus to look for peaks.", target="post-stim-search-input"),
+                        ], width=6, md=3),
                     ]),
                     
                     # --- Tooltips for all checkboxes ---
@@ -1001,28 +1043,33 @@ def handle_trial_navigation(
     State('post-stim-window-input', 'value'),
     State('mvc-left-store', 'data'),
     State('mvc-right-store', 'data'),
+    # Peak Detection Settings (as State)
+    State('min-valid-rt-input', 'value'),
+    State('min-prominence-input', 'value'),
+    State('pre-stim-search-input', 'value'),
+    State('post-stim-search-input', 'value'),
     # Analysis States
     State('analysis-peak-force-checkbox', 'value'),
     State('analysis-mrspt-checkbox', 'value'),
     State('analysis-mrt-checkbox', 'value'),
-    State('analysis-fti-checkbox', 'value')    
+    State('analysis-fti-checkbox', 'value')
 )
 def update_trial_data(
     selected_block, selected_trial, condition_data_dict, session_id,
     channel_map, trial_lookup_dict, pre_window, post_window,
     mvc_left, mvc_right,
+    min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
     run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral
 ):
     """
-    This callback runs a "Full Update" when the selected trial changes,
-    including any selected single-trial analyses in a dependency chain.
+    This callback runs the full, robust analysis pipeline when the selected trial changes.
     """
     if not all([session_id, channel_map, trial_lookup_dict, selected_block, selected_trial]):
         raise PreventUpdate
 
     app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
     filepath = app_temp_dir / f"{session_id}.feather"
-    df = pd.read_feather(filepath)
+    full_df = pd.read_feather(filepath)
     trial_lookup = pd.DataFrame(trial_lookup_dict)
 
     matching_trials = trial_lookup.query(
@@ -1032,9 +1079,9 @@ def update_trial_data(
         raise PreventUpdate
     global_index_to_use = matching_trials['global_index'].iloc[0]
 
-    # Call the main "contractor" function to get the base data and metrics
-    trial_segment_df, base_metrics = get_trial_data_and_metrics(
-        full_df=df,
+    # Call the original "contractor" function to get base metrics and the VISUALIZATION data slice
+    trial_view_df, base_metrics = get_trial_data_and_metrics(
+        full_df=full_df,
         trial_lookup=trial_lookup,
         condition_data=pd.DataFrame(condition_data_dict),
         trial_index=global_index_to_use,
@@ -1045,92 +1092,95 @@ def update_trial_data(
         post_window=post_window
     )
 
-    # --- Analysis Dependency Chain ---
-    # ----------------------------------
-
-     # 1. Calculate Foundational Metrics if needed
-    if run_peak_force or run_motor_reaction_time or run_motor_response_time or run_force_time_integral:
-        peak_metrics = peak_force_metrics(
-            signal_df=trial_segment_df,
-            stim_time=base_metrics['stim_time'],
-            response_hand=base_metrics['response_hand'],
-            threshold=base_metrics['threshold'],
-            mvc_left=mvc_left,
-            mvc_right=mvc_right
-        )
-        base_metrics.update(peak_metrics)
-        
-        if 'time_to_peak' in base_metrics:
-            peak_time = base_metrics['stim_time'] + base_metrics['time_to_peak']
-            
-            if run_motor_reaction_time or run_force_time_integral:
-                onset_time = find_contraction_onset(
-                    signal_df=trial_segment_df,
-                    stim_time=base_metrics['stim_time'],
-                    peak_time=peak_time,
-                    response_hand=base_metrics['response_hand']
-                )
-                base_metrics['force_onset_time'] = onset_time
-
-            if run_force_time_integral:
-                offset_time = find_contraction_offset(
-                    signal_df=trial_segment_df,
-                    peak_time=peak_time,
-                    peak_value=base_metrics['peak_force'],
-                    response_hand=base_metrics['response_hand']
-                )
-                base_metrics['force_offset_time'] = offset_time
-                
-                baseline = find_baseline_force(
-                    signal_df=trial_segment_df,
-                    peak_time=peak_time,
-                    response_hand=base_metrics['response_hand']
-                )
-                base_metrics['baseline_force'] = baseline
-
-    # 2. Calculate Final "Leaf" Metrics
-    if run_motor_reaction_time:
-        mrt_val = motor_reaction_time(
-            stim_time=base_metrics.get('stim_time'),
-            onset_time=base_metrics.get('force_onset_time')
-        )
-        base_metrics['motor_reaction_time'] = mrt_val
+    # --- New Unbiased Analysis Pipeline ---
     
-    if run_motor_response_time:
-        if all(k in base_metrics for k in ['time_to_peak', 'peak_force']):
-            mrspt_val = motor_response_time(
-                signal_df=trial_segment_df,
-                stim_time=base_metrics['stim_time'],
-                peak_time=base_metrics['stim_time'] + base_metrics['time_to_peak'],
-                peak_force=base_metrics['peak_force'],
-                threshold=base_metrics['threshold'],
-                response_hand=base_metrics['response_hand']
+    # 1. Intelligently find the main contraction event, regardless of hand.
+    peak_info = fa.find_main_contraction_peak(
+        full_df=full_df,
+        stim_time=base_metrics['stim_time'],
+        channel_map=channel_map,
+        threshold=base_metrics['threshold'],
+        min_valid_rt_s=min_valid_rt_s,
+        min_prominence_n=min_prominence_n,
+        search_window_pre_s=pre_stim_search_s,
+        search_window_post_s=post_stim_search_s
+    )
+    
+    # Set the initial status and overwrite the response_hand with the unbiased result.
+    base_metrics['trial_status'] = peak_info['status']
+    base_metrics['response_hand'] = peak_info['response_hand']
+    
+    # 2. If a peak was found, run all subsequent analyses.
+    if peak_info['analysis_df'] is not None:
+        analysis_df = peak_info['analysis_df']
+        base_metrics['peak_time'] = peak_info['peak_time']
+        base_metrics['peak_value'] = peak_info['peak_value']
+        base_metrics['time_to_peak'] = peak_info['peak_time'] - base_metrics['stim_time']
+
+        # 3. Calculate all other foundational metrics using the clean 'analysis_df'.
+        onset_time = fa.find_contraction_onset(
+            signal_df=analysis_df, stim_time=base_metrics['stim_time'],
+            peak_time=peak_info['peak_time'], response_hand=base_metrics['response_hand']
+        )
+        base_metrics['force_onset_time'] = onset_time
+
+        offset_time = fa.find_contraction_offset(
+            signal_df=analysis_df, peak_time=peak_info['peak_time'],
+            peak_value=peak_info['peak_value'], response_hand=base_metrics['response_hand']
+        )
+        base_metrics['force_offset_time'] = offset_time
+        
+        baseline = fa.find_baseline_force(
+            signal_df=analysis_df, peak_time=peak_info['peak_time'],
+            response_hand=base_metrics['response_hand']
+        )
+        base_metrics['baseline_force'] = baseline
+
+        # 4. Calculate final "leaf" metrics that the user explicitly requested.
+        if run_motor_reaction_time:
+            base_metrics['motor_reaction_time'] = fa.motor_reaction_time(
+                stim_time=base_metrics.get('stim_time'), onset_time=onset_time
             )
-            base_metrics['motor_response_time'] = mrspt_val
-            
-    if run_force_time_integral:
-        if all(k in base_metrics for k in ['force_onset_time', 'force_offset_time', 'baseline_force']):
+        
+        if run_motor_response_time:
+             base_metrics['motor_response_time'] = fa.motor_response_time(
+                onset_time=onset_time, peak_time=peak_info['peak_time']
+            )
+
+        if run_force_time_integral:
             mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
-            
-            impulse_metrics = calculate_impulse(
-                signal_df=trial_segment_df,
-                onset_time=base_metrics.get('force_onset_time'),
-                offset_time=base_metrics.get('force_offset_time'),
-                baseline_force=base_metrics.get('baseline_force'),
-                mvc_value=mvc_val,
-                response_hand=base_metrics.get('response_hand')
+            impulse_metrics = fa.calculate_impulse(
+                signal_df=analysis_df, onset_time=onset_time, offset_time=offset_time,
+                baseline_force=baseline, mvc_value=mvc_val, response_hand=base_metrics.get('response_hand')
             )
             base_metrics.update(impulse_metrics)
- 
+        
+        if run_peak_force:
+            derived_peak_metrics = fa.peak_force_metrics(
+                signal_df=analysis_df,
+                stim_time=base_metrics['stim_time'],
+                response_hand=base_metrics['response_hand'],
+                threshold=base_metrics['threshold'],
+                mvc_left=mvc_left, mvc_right=mvc_right
+            )
+            base_metrics.update(derived_peak_metrics)
+
+    # 5. Final Trial Status Interpretation
+    LATE_RESPONSE_THRESHOLD_S = 1.0 
+    if base_metrics['trial_status'] == 'valid':
+        mrt_s = base_metrics.get('motor_reaction_time', float('inf')) / 1000.0 if base_metrics.get('motor_reaction_time') is not None else float('inf')
+        if mrt_s > LATE_RESPONSE_THRESHOLD_S:
+            base_metrics['trial_status'] = 'late_response'
+        elif base_metrics.get('force_offset_time') is not None and base_metrics['force_offset_time'] >= trial_view_df['time'].iloc[-1]:
+            base_metrics['trial_status'] = 'late_offset'
 
     # --- Plotting and display logic ---
     base_metrics['block_trial_str'] = f"Block {selected_block}, Trial {selected_trial}"
+    
+    # The plot always uses the user's view window (trial_view_df)
     fig = create_trial_figure(
-        trial_segment_df, channel_map, mvc_left, mvc_right, base_metrics,
-        run_peak_force=run_peak_force, 
-        run_motor_response_time=run_motor_response_time,
-        run_motor_reaction_time=run_motor_reaction_time,
-        run_force_time_integral=run_force_time_integral
+        trial_view_df, channel_map, mvc_left, mvc_right, base_metrics,
+        run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral
     )
     
     metrics_layout = dbc.Card(dbc.CardBody([

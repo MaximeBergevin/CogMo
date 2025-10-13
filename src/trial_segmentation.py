@@ -122,18 +122,16 @@ def get_trial_data_and_metrics(
     post_window: float
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
-    MAIN CONTROLLER FUNCTION:
-    Orchestrates the process of fetching and analyzing a trial. This is the
-    function your Dash callback will call.
+    1. Get the slice of data for the USER'S VIEW.
+    2. Gather the BASE METRICS (stim_time, threshold, etc.) needed to START the main analysis pipeline.
     """
     # 1. Find the trial and its essential info
-    # -----------------------------------------
     trial_info_row = trial_lookup.query(f'global_index == @trial_index')
     if trial_info_row.empty:
         raise ValueError(f"Trial index {trial_index} not found.")
     
-    block_numb = trial_info_row['block_number'].iloc[0]
-    trial_numb = trial_info_row['trial_number'].iloc[0]
+    block_numb = int(trial_info_row['block_number'].iloc[0])
+    trial_numb = int(trial_info_row['trial_number'].iloc[0])
 
     stim_row = full_df.query(f"block_number == {block_numb} & trial_number == {trial_numb} & is_trial_start == True")
     if stim_row.empty:
@@ -142,24 +140,46 @@ def get_trial_data_and_metrics(
     time_col = channel_map.get('time')
     stim_time = stim_row[time_col].iloc[0]
     
-    # 2. Call the first modular function to get the raw data segment
-    # ---------------------------------------------------------------
-    trial_segment_df = get_trial_segment(full_df, stim_time, time_col, pre_window, post_window)
+    # 2. Get the user's visualization DataFrame using the view parameters
+    trial_view_df = get_trial_segment(full_df, stim_time, time_col, pre_window, post_window)
 
-    # 3. Gather all necessary info for analysis
-    # ------------------------------------------
-    condition_row = condition_data.iloc[block_numb - 1] # Assumes 1-based block numbering
-    trial_info_dict = {
-        'trial_index': trial_index,
-        'block_numb': block_numb,
-        'stim_time': stim_time
+    # 3. Gather the initial "base_metrics" needed for the main analysis
+    condition_row = condition_data.iloc[block_numb - 1]
+    
+    motor_col = _resolve_col(condition_row.to_frame().T, 'motor|phys')
+    cog_col = _resolve_col(condition_row.to_frame().T, 'cognitive|cog|mental')
+    id_col = _resolve_col(condition_row.to_frame().T, 'part|id')
+    
+    motor_demand = condition_row.get(motor_col) if motor_col else None
+    
+    # This is a naive first guess for response_hand, which will be overwritten by the smart analysis.
+    # It's only used here to calculate an initial threshold.
+    force_r_col = channel_map.get('force_right')
+    force_l_col = channel_map.get('force_left')
+    # BUG FIX: Use the sliced trial_view_df, not the full_df, to get a local max.
+    initial_response_hand = 'right' if trial_view_df[force_r_col].max() > trial_view_df[force_l_col].max() else 'left'
+    
+    threshold = None
+    mvc_value = mvc_right if initial_response_hand == 'right' else mvc_left
+    if motor_demand is not None and mvc_value is not None:
+        try:
+            multiplier = float(motor_demand)
+            threshold = multiplier * mvc_value
+        except (ValueError, TypeError):
+            motor_demand_str = str(motor_demand).lower()
+            if 'low' in motor_demand_str:
+                threshold = 0.05 * mvc_value
+            elif 'high' in motor_demand_str:
+                threshold = 0.30 * mvc_value
+
+    base_metrics = {
+        'participant_id': condition_row.get(id_col) if id_col else None,
+        'global_index': trial_index,
+        'block': block_numb,
+        'stim_time': stim_time,
+        'cognitive_demand': condition_row.get(cog_col) if cog_col else None,
+        'motor_demand': motor_demand,
+        'threshold': threshold,
     }
 
-    # 4. Call the second modular function to calculate metrics
-    # ---------------------------------------------------------
-    trial_metrics = analyze_trial_metrics(
-        trial_segment_df, stim_row, condition_row, trial_info_dict, 
-        channel_map, mvc_left, mvc_right
-    )
-
-    return trial_segment_df, trial_metrics
+    return trial_view_df, base_metrics

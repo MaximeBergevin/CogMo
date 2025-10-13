@@ -270,6 +270,90 @@ def find_contraction_onset(
     return onset_candidates['time'].max()
 
 
+def find_main_contraction_peak(
+    full_df: pd.DataFrame,
+    stim_time: float,
+    channel_map: Dict[str, str],
+    threshold: float,
+    min_valid_rt_s: float,
+    min_prominence_n: float,
+    search_window_pre_s: float,
+    search_window_post_s: float
+) -> Dict[str, Any]:
+    """
+    Intelligently finds the primary contraction peak on EITHER hand.
+    Returns a dictionary with the peak's properties, the determined response hand,
+    and a dynamically sliced analysis DataFrame centered around the peak.
+    """
+    force_r_col = channel_map.get('force_right')
+    force_l_col = channel_map.get('force_left')
+
+    # 1. Broad Search for Candidate Peaks on Both Hands
+    # --------------------------------------------------
+    search_start = stim_time - search_window_pre_s
+    search_end = stim_time + search_window_post_s
+    search_df = full_df[(full_df['time'] >= search_start) & (full_df['time'] <= search_end)].copy()
+
+    if search_df.empty:
+        return {'status': 'omission', 'peak_time': None, 'peak_value': None, 'response_hand': None, 'analysis_df': None}
+
+    # Find all meaningful peaks on the right hand
+    r_peak_indices, _ = signal.find_peaks(search_df[force_r_col], height=threshold, prominence=min_prominence_n)
+    right_peaks = search_df.iloc[r_peak_indices].copy()
+    right_peaks['hand'] = 'right'
+    
+    # Find all meaningful peaks on the left hand
+    l_peak_indices, _ = signal.find_peaks(search_df[force_l_col], height=threshold, prominence=min_prominence_n)
+    left_peaks = search_df.iloc[l_peak_indices].copy()
+    left_peaks['hand'] = 'left'
+
+    # Combine all found peaks into a single DataFrame
+    all_peaks_df = pd.concat([right_peaks, left_peaks]).sort_values(by='time')
+
+    if all_peaks_df.empty:
+        return {'status': 'omission', 'peak_time': None, 'peak_value': None, 'response_hand': None, 'analysis_df': None}
+
+    # 2. Apply Prioritized Selection Rule
+    # ------------------------------------
+    valid_rt_boundary = stim_time + min_valid_rt_s
+    
+    valid_response_peaks = all_peaks_df[all_peaks_df['time'] >= valid_rt_boundary]
+    false_start_peaks = all_peaks_df[all_peaks_df['time'] < valid_rt_boundary]
+    
+    target_peak = None
+    status = 'omission'
+
+    if not valid_response_peaks.empty:
+        # The true response is the EARLIEST valid peak after the RT window
+        target_peak = valid_response_peaks.iloc[0]
+        status = 'valid'
+    elif not false_start_peaks.empty:
+        # The false start is the LAST peak that occurred before the RT window
+        target_peak = false_start_peaks.iloc[-1]
+        status = 'false_start'
+    
+    if target_peak is None:
+        return {'status': status, 'peak_time': None, 'peak_value': None, 'response_hand': None, 'analysis_df': None}
+    
+    peak_time = target_peak['time']
+    response_hand = target_peak['hand']
+    peak_value = target_peak[channel_map.get(f"force_{response_hand}")] # Get value from the correct column
+
+    # 3. Create the Dynamic Analysis Window
+    # --------------------------------------
+    analysis_start = peak_time - 1.25
+    analysis_end = peak_time + 1.25
+    analysis_df = full_df[(full_df['time'] >= analysis_start) & (full_df['time'] <= analysis_end)]
+
+    return {
+        'status': status,
+        'peak_time': peak_time,
+        'peak_value': peak_value,
+        'response_hand': response_hand, # Return the determined hand
+        'analysis_df': analysis_df
+    }
+
+
 def motor_reaction_time(
     stim_time: float,
     onset_time: Optional[float]

@@ -1,5 +1,3 @@
-# tests/test_trial_segmentation.py
-
 import pandas as pd
 import numpy as np
 import pytest
@@ -9,90 +7,100 @@ from pandas.testing import assert_frame_equal
 from trial_segmentation import (
     create_trial_lookup, 
     get_trial_segment, 
-    analyze_trial_metrics, 
     get_trial_data_and_metrics
 )
 
 # Import the helper functions/fixtures from conftest
 from conftest import create_mock_trial_lookup, create_mock_signal_data, create_mock_condition_data
 
+def test_create_trial_lookup():
+    """
+    Tests that create_trial_lookup correctly builds the lookup table from raw data.
+    """
+    n_blocks = 12
+    n_trials_per_block = 24
+    
+    expected_lookup = create_mock_trial_lookup(n_blocks, n_trials_per_block)
+    
+    raw_data = expected_lookup[['block_number', 'trial_number']].copy()
+    raw_data['is_trial_start'] = True
+    
+    distractor_rows = pd.DataFrame({
+        'block_number': [1, 1],
+        'trial_number': [1, 2],
+        'is_trial_start': [False, False]
+    })
+    raw_data = pd.concat([raw_data, distractor_rows]).sort_index().reset_index(drop=True)
 
-def test_get_trial_data_and_metrics_integration(mock_trial_lookup):
+    result = create_trial_lookup(raw_data)
+    
+    assert isinstance(result, pd.DataFrame)
+    assert_frame_equal(result, expected_lookup)
+
+# ==============================================================================
+# --- REFACTORED: Test for the updated get_trial_data_and_metrics function ---
+# ==============================================================================
+def test_get_trial_data_and_metrics(mock_trial_lookup, mock_signal_data_factory, mock_condition_data):
     """
-    Integration test for get_trial_data_and_metrics, verifying the full process
-    of segmentation and analysis for a single trial.
+    Tests that get_trial_data_and_metrics correctly gathers base trial info
+    and slices the user-defined view window.
     """
-    #  Define Mock Data & Parameters ---
+    #  --- Define Mock Data & Parameters ---
     stim_time_val = 1.5
     mvc_l_val = 200.0
     mvc_r_val = 210.0
-    pre_window_val = 0.125
-    post_window_val = 1.25
+    pre_window_val = 0.5 # Use a distinct value for testing the slice
+    post_window_val = 1.0 # Use a distinct value for testing the slice
     
-    # Create mock raw data with custom column names and a "left" dominant force
-    mock_force_df, expected_metrics = create_mock_signal_data(
-        stim_time_within_segment = stim_time_val,
-        dominant_force = "left", # To test that response_hand is correctly identified
-        motor_condition = "high",
-        mvc = mvc_l_val, # MVC for the dominant hand
-        force_r_col_name = "OriginalForceR",
-        force_l_col_name = "OriginalForceL",
-        emg_r_col_name = "OriginalEMGR",
-        emg_l_col_name = "OriginalEMGL"
+    mock_force_df, _ = mock_signal_data_factory(
+        stim_time_within_segment=stim_time_val,
+        force_r_col_name="OriginalForceR",
+        force_l_col_name="OriginalForceL"
     )
     
-    # Define the mapping from standard names to the file's custom names
     channel_map = {
         'time': 'time',
         'force_right': 'OriginalForceR',
-        'force_left': 'OriginalForceL',
-        'emg_right': 'OriginalEMGR',
-        'emg_left': 'OriginalEMGL'
+        'force_left': 'OriginalForceL'
     }
 
-    # Create a custom condition data for this test that has "highForce" for Block 1
-    custom_condition_data = create_mock_condition_data(
-        block_motor_conditions=["highForce", "lowForce"]
+    # --- Call the function under test ---
+    trial_view_df, base_metrics = get_trial_data_and_metrics(
+        full_df=mock_force_df,
+        trial_lookup=mock_trial_lookup,
+        condition_data=mock_condition_data,
+        trial_index=1,
+        channel_map=channel_map,
+        mvc_left=mvc_l_val,
+        mvc_right=mvc_r_val,
+        pre_window=pre_window_val,
+        post_window=post_window_val
     )
 
-    # Call the function under test ---
-    trial_segment_df, trial_metrics = get_trial_data_and_metrics(
-        full_df = mock_force_df,
-        trial_lookup = mock_trial_lookup,
-        condition_data = custom_condition_data, # Use the custom data
-        trial_index = 1, # Test the first global trial
-        channel_map = channel_map,
-        mvc_left = mvc_l_val,
-        mvc_right = mvc_r_val,
-        pre_window = pre_window_val,
-        post_window = post_window_val
-    )
-
-    # 1. Check the returned types
-    assert isinstance(trial_segment_df, pd.DataFrame)
-    assert isinstance(trial_metrics, dict)
+    #  Assertions
+    # -----------
     
-    # 2. Check metadata values in the metrics dictionary
-    assert trial_metrics['participant_id'] == "p01_test"
-    assert trial_metrics['global_index'] == 1
-    assert trial_metrics['block'] == 1
-    assert trial_metrics['stim_time'] == pytest.approx(stim_time_val)
-    assert trial_metrics['cognitive_demand'] == "congruent"
-    assert trial_metrics['motor_demand'] == "highForce" # Corrected assertion
-    assert trial_metrics['response_hand'] == "left"
+    # 1. Check returned types
+    assert isinstance(trial_view_df, pd.DataFrame)
+    assert isinstance(base_metrics, dict)
     
-    # 3. Check threshold calculation: motor="high", hand="left"
-    expected_threshold = 0.30 * mvc_l_val
-    assert trial_metrics['threshold'] == pytest.approx(expected_threshold)
+    # 2. Check that the base_metrics dictionary contains the correct essential keys.
+    expected_keys = ['participant_id', 'global_index', 'block', 'stim_time', 
+                     'cognitive_demand', 'motor_demand', 'threshold']
+    assert all(key in base_metrics for key in expected_keys)
+    assert 'response_hand' not in base_metrics 
+    
+    # 3. Check specific values in the base_metrics
+    assert base_metrics['participant_id'] == "p01_test"
+    assert base_metrics['global_index'] == 1
+    assert base_metrics['stim_time'] == pytest.approx(stim_time_val)
+    assert base_metrics['motor_demand'] == "lowForce"
+    # Check that an initial threshold was calculated
+    assert base_metrics['threshold'] is not None
 
-    # 4. Check the sliced signal DataFrame
-    assert "force_left" not in trial_segment_df.columns
-    assert "OriginalForceL" in trial_segment_df.columns
-
-    # 5. Check dimensions of the sliced signal DataFrame
-    time_increment = 1 / 500 # From create_mock_signal_data default
-    expected_rows = int((pre_window_val + post_window_val) / time_increment) + 1
-    assert len(trial_segment_df) == expected_rows
+    # 4. Check that the returned DataFrame (the user's view) was sliced correctly
+    assert trial_view_df['time'].min() == pytest.approx(stim_time_val - pre_window_val)
+    assert trial_view_df['time'].max() == pytest.approx(stim_time_val + post_window_val)
 
 
 # ==============================================================================
