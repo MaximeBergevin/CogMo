@@ -1106,7 +1106,6 @@ def update_trial_data(
         search_window_post_s=post_stim_search_s
     )
     
-    # Set the initial status and overwrite the response_hand with the unbiased result.
     base_metrics['trial_status'] = peak_info['status']
     base_metrics['response_hand'] = peak_info['response_hand']
     
@@ -1115,6 +1114,7 @@ def update_trial_data(
         analysis_df = peak_info['analysis_df']
         base_metrics['peak_time'] = peak_info['peak_time']
         base_metrics['peak_value'] = peak_info['peak_value']
+        # This is a temporary time_to_peak, it will be overwritten if peak_force is checked
         base_metrics['time_to_peak'] = peak_info['peak_time'] - base_metrics['stim_time']
 
         # 3. Calculate all other foundational metrics using the clean 'analysis_df'.
@@ -1137,15 +1137,37 @@ def update_trial_data(
         base_metrics['baseline_force'] = baseline
 
         # 4. Calculate final "leaf" metrics that the user explicitly requested.
+        
+        # --- THIS BLOCK IS NOW ADDED BACK AND CORRECTED ---
+        if run_peak_force:
+            mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
+            derived_peak_metrics = fa.peak_force_metrics(
+                peak_value=base_metrics['peak_value'],
+                peak_time=base_metrics['peak_time'],
+                stim_time=base_metrics['stim_time'],
+                threshold=base_metrics['threshold'],
+                mvc_value=mvc_val
+            )
+            base_metrics.update(derived_peak_metrics)
+
         if run_motor_reaction_time:
             base_metrics['motor_reaction_time'] = fa.motor_reaction_time(
                 stim_time=base_metrics.get('stim_time'), onset_time=onset_time
             )
         
         if run_motor_response_time:
-             base_metrics['motor_response_time'] = fa.motor_response_time(
-                onset_time=onset_time, peak_time=peak_info['peak_time']
+        # This check ensures we have the necessary values from the foundational steps
+         if all(k in base_metrics for k in ['time_to_peak', 'peak_value']):
+            # This call now correctly matches the signature of your function
+            mrspt_val = fa.motor_response_time(
+                signal_df=analysis_df,
+                stim_time=base_metrics['stim_time'],
+                peak_time=base_metrics['stim_time'] + base_metrics['time_to_peak'],
+                peak_force=base_metrics['peak_value'],
+                threshold=base_metrics['threshold'],
+                response_hand=base_metrics['response_hand']
             )
+            base_metrics['motor_response_time'] = mrspt_val
 
         if run_force_time_integral:
             mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
@@ -1154,16 +1176,6 @@ def update_trial_data(
                 baseline_force=baseline, mvc_value=mvc_val, response_hand=base_metrics.get('response_hand')
             )
             base_metrics.update(impulse_metrics)
-        
-        if run_peak_force:
-            derived_peak_metrics = fa.peak_force_metrics(
-                signal_df=analysis_df,
-                stim_time=base_metrics['stim_time'],
-                response_hand=base_metrics['response_hand'],
-                threshold=base_metrics['threshold'],
-                mvc_left=mvc_left, mvc_right=mvc_right
-            )
-            base_metrics.update(derived_peak_metrics)
 
     # 5. Final Trial Status Interpretation
     LATE_RESPONSE_THRESHOLD_S = 1.0 
@@ -1177,7 +1189,6 @@ def update_trial_data(
     # --- Plotting and display logic ---
     base_metrics['block_trial_str'] = f"Block {selected_block}, Trial {selected_trial}"
     
-    # The plot always uses the user's view window (trial_view_df)
     fig = create_trial_figure(
         trial_view_df, channel_map, mvc_left, mvc_right, base_metrics,
         run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral
