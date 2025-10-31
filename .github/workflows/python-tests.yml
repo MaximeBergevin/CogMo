@@ -34,9 +34,7 @@ jobs:
           
       - name: Install and Compile Dependencies
         run: |
-          # Force-upgrade the build tools to ensure they are in sync
-          python -m pip install --upgrade pip setuptools pip-tools
-          # Now, run the compile and install commands
+          python -m pip install --upgrade "pip==23.3.1" "setuptools==68.2.2" "pip-tools==6.13.0"
           pip-compile requirements.in -o requirements_linux.txt
           pip install -r requirements_linux.txt
           pip install -e .
