@@ -117,6 +117,85 @@ def calculate_mean_force(
     }
 
 
+def calculate_rfd(
+    signal_df: pd.DataFrame,
+    onset_time: Optional[float],
+    peak_time: Optional[float],
+    baseline_force: Optional[float],
+    response_hand: str,
+    early_rfd_window_ms: int
+) -> Dict[str, Any]:
+    """
+    Computes Early RFD (over a fixed window) and Peak RFD (max slope).
+    """
+    force_col = f"force_{response_hand}"
+
+    if (onset_time is None or peak_time is None or baseline_force is None or
+            peak_time <= onset_time):
+        return {'early_rfd': None, 'peak_rfd': None}
+
+    contraction_df = signal_df[
+        (signal_df['time'] >= onset_time) & (signal_df['time'] <= peak_time)
+    ].copy()
+
+    if len(contraction_df) < 2:
+        return {'early_rfd': None, 'peak_rfd': None}
+
+    force_corrected = contraction_df[force_col] - baseline_force
+    time_seconds = contraction_df['time']
+
+    # --- 1. Calculate Early RFD (Unchanged) ---
+    early_rfd = None
+    early_rfd_window_s = early_rfd_window_ms / 1000.0
+    end_time = onset_time + early_rfd_window_s
+    
+    early_df_slice = contraction_df[contraction_df['time'] <= end_time]
+    
+    if len(early_df_slice) > 1:
+        force_at_start = force_corrected.iloc[0]
+        force_at_end = force_corrected.loc[early_df_slice.index[-1]]
+        time_at_end = early_df_slice['time'].iloc[-1]
+        
+        delta_time = time_at_end - onset_time
+        if delta_time > 0:
+            early_rfd = (force_at_end - force_at_start) / delta_time
+
+    # --- 2. Calculate Peak RFD (Late RFD) ---
+    #    This is the corrected 20ms sliding window logic, translated from your R code.
+    
+    force_array = force_corrected.to_numpy()
+    time_array = time_seconds.to_numpy()
+    
+    # Get the median time between samples
+    dt = np.median(np.diff(time_array))
+    # Calculate how many samples are in a 20ms window
+    window_samples = int(round(0.020 / dt))
+    
+    if window_samples < 1:
+        window_samples = 1 # Ensure at least 1 sample difference
+    
+    if len(force_array) <= window_samples:
+        peak_rfd = None # Not enough data to calculate a slope
+    else:
+        # Calculate the vectorized differences
+        n = len(force_array)
+        end_vals = force_array[window_samples:]
+        start_vals = force_array[:-window_samples]
+        
+        dt_vals = time_array[window_samples:] - time_array[:-window_samples]
+        
+        # Calculate all slopes in the window
+        slopes = (end_vals - start_vals) / dt_vals
+        
+        # Find the maximum slope
+        peak_rfd = np.max(slopes)
+
+    return {
+        'early_rfd': early_rfd,
+        'peak_rfd': peak_rfd
+    }
+
+
 def find_baseline_force(
     signal_df: pd.DataFrame,
     peak_time: float,

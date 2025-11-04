@@ -1027,14 +1027,17 @@ def handle_trial_navigation(
 # Callback for trial segmentation initilization
 # ----------------------------------------------
 @app.callback(
+    # --- Outputs ---
     Output('trial-graph', 'figure'),
     Output('trial-metrics-display', 'children'),
     Output('current-stim-time-store', 'data'),
     Output('current-trial-metrics-store', 'data'),
-    # Triggers
+    
+    # --- Triggers ---
     Input('block-selector-dropdown', 'value'),
     Input('trial-selector-dropdown', 'value'),
-    # Data Sources (as State)
+    
+    # --- Data Sources ---
     State('condition-data-store', 'data'),
     State('signal-data-store', 'data'),
     State('channel-map-store', 'data'),
@@ -1043,17 +1046,23 @@ def handle_trial_navigation(
     State('post-stim-window-input', 'value'),
     State('mvc-left-store', 'data'),
     State('mvc-right-store', 'data'),
-    # Peak Detection Settings (as State)
+    
+    # --- Peak Detection Settings ---
     State('min-valid-rt-input', 'value'),
     State('min-prominence-input', 'value'),
     State('pre-stim-search-input', 'value'),
     State('post-stim-search-input', 'value'),
-    # Analysis States
+    
+    # --- Analysis Checkboxes ---
     State('analysis-peak-force-checkbox', 'value'),
     State('analysis-mrspt-checkbox', 'value'),
     State('analysis-mrt-checkbox', 'value'),
     State('analysis-fti-checkbox', 'value'),
-    State('analysis-mean-force-checkbox', 'value') # ADDED
+    State('analysis-mean-force-checkbox', 'value'),
+    State('analysis-rfd-checkbox', 'value'),
+    State('analysis-rfd-window-input', 'value'),
+    State('input-rfd-left', 'value'),
+    State('input-rfd-right', 'value')
 )
 def update_trial_data(
     selected_block, selected_trial, condition_data_dict, session_id,
@@ -1061,14 +1070,18 @@ def update_trial_data(
     mvc_left, mvc_right,
     min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
     run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral,
-    run_mean_force # ADDED
+    run_mean_force, run_rfd, rfd_window_ms,
+    rfd_baseline_left, rfd_baseline_right
 ):
     """
-    This callback runs the full, robust analysis pipeline when the selected trial changes.
+    This is the main "controller" callback for the Trial Viewer.
+    It runs the full, robust analysis pipeline when the selected trial changes.
     """
     if not all([session_id, channel_map, trial_lookup_dict, selected_block, selected_trial]):
         raise PreventUpdate
 
+    #  Initial Data Loading
+    # ----------------------
     app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
     filepath = app_temp_dir / f"{session_id}.feather"
     full_df = pd.read_feather(filepath)
@@ -1081,7 +1094,8 @@ def update_trial_data(
         raise PreventUpdate
     global_index_to_use = matching_trials['global_index'].iloc[0]
 
-    # Call the original "contractor" function to get base metrics and the VISUALIZATION data slice
+    # Call the contractor function to get the base metrics (threshold, stim_time, etc.)
+    # and the DataFrame for the user's visualization window.
     trial_view_df, base_metrics = get_trial_data_and_metrics(
         full_df=full_df,
         trial_lookup=trial_lookup,
@@ -1094,9 +1108,11 @@ def update_trial_data(
         post_window=post_window
     )
 
-    # --- Analysis Pipeline ---
+    #  Robust Analysis Pipeline
+    # --------------------------
     
-    # 1. Intelligently find the main contraction event, regardless of hand.
+    # Intelligently find the main contraction event, regardless of hand.
+    # This is the "master" function that defines the analysis context.
     peak_info = fa.find_main_contraction_peak(
         full_df=full_df,
         stim_time=base_metrics['stim_time'],
@@ -1108,62 +1124,69 @@ def update_trial_data(
         search_window_post_s=post_stim_search_s
     )
     
+    # Set the initial status and the true responding hand from the peak finder
     base_metrics['trial_status'] = peak_info['status']
     base_metrics['response_hand'] = peak_info['response_hand']
     
-    # 2. If a peak was found, run all subsequent analyses.
+    # Run all subsequent analyses *only if* a valid peak was found.
     if peak_info['analysis_df'] is not None and base_metrics['response_hand'] is not None:
+        
+        # Use the dynamically centered analysis window from the peak finder
         analysis_df = peak_info['analysis_df']
+        
+        # Store the found peak info
         base_metrics['peak_time'] = peak_info['peak_time']
         base_metrics['peak_value'] = peak_info['peak_value']
-        # This is a temporary time_to_peak, it will be overwritten if peak_force is checked
         base_metrics['time_to_peak'] = peak_info['peak_time'] - base_metrics['stim_time']
 
-        # 3. Calculate all other foundational metrics using the clean 'analysis_df'.
-        
-        # 3a. Calculate foundational metrics needed by other analyses
-        if run_peak_force or run_motor_reaction_time or run_motor_response_time or run_force_time_integral or run_mean_force:
-            mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
+        # Calculate Foundational Metrics
+        # This block calculates metrics that are pre-requisites for other "leaf" analyses.
+        if (run_peak_force or run_motor_reaction_time or run_motor_response_time or 
+            run_force_time_integral or run_mean_force or run_rfd):
             
-            # Calculate peak metrics (needed by almost everything)
-            peak_metrics = fa.peak_force_metrics(
+            mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
+            peak_time = base_metrics['stim_time'] + base_metrics['time_to_peak']
+            
+            # Find Onset Time (needed for MRT, FTI, Mean Force, RFD)
+            if run_motor_reaction_time or run_force_time_integral or run_mean_force or run_rfd:
+                onset_time = fa.find_contraction_onset(
+                    signal_df=analysis_df,
+                    stim_time=base_metrics['stim_time'],
+                    peak_time=peak_time,
+                    response_hand=base_metrics['response_hand']
+                )
+                base_metrics['force_onset_time'] = onset_time
+
+            # Find Offset Time & Baseline (needed for FTI, Mean Force, RFD)
+            if run_force_time_integral or run_mean_force or run_rfd:
+                offset_time = fa.find_contraction_offset(
+                    signal_df=analysis_df,
+                    peak_time=peak_time,
+                    peak_value=base_metrics['peak_force'],
+                    response_hand=base_metrics['response_hand']
+                )
+                base_metrics['force_offset_time'] = offset_time
+                
+                baseline = fa.find_baseline_force(
+                    signal_df=analysis_df,
+                    peak_time=peak_time,
+                    response_hand=base_metrics['response_hand']
+                )
+                base_metrics['baseline_force'] = baseline
+
+        # Calculate Final "Leaf" Metrics
+        
+        if run_peak_force:
+            mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
+            derived_peak_metrics = fa.peak_force_metrics(
                 peak_value=base_metrics['peak_value'],
                 peak_time=base_metrics['peak_time'],
                 stim_time=base_metrics['stim_time'],
                 threshold=base_metrics['threshold'],
                 mvc_value=mvc_val
             )
-            base_metrics.update(peak_metrics)
-            
-            if 'time_to_peak' in base_metrics:
-                peak_time = base_metrics['stim_time'] + base_metrics['time_to_peak']
-                
-                if run_motor_reaction_time or run_force_time_integral or run_mean_force:
-                    onset_time = fa.find_contraction_onset(
-                        signal_df=analysis_df,
-                        stim_time=base_metrics['stim_time'],
-                        peak_time=peak_time,
-                        response_hand=base_metrics['response_hand']
-                    )
-                    base_metrics['force_onset_time'] = onset_time
+            base_metrics.update(derived_peak_metrics)
 
-                if run_force_time_integral or run_mean_force:
-                    offset_time = fa.find_contraction_offset(
-                        signal_df=analysis_df,
-                        peak_time=peak_time,
-                        peak_value=base_metrics['peak_force'],
-                        response_hand=base_metrics['response_hand']
-                    )
-                    base_metrics['force_offset_time'] = offset_time
-                    
-                    baseline = fa.find_baseline_force(
-                        signal_df=analysis_df,
-                        peak_time=peak_time,
-                        response_hand=base_metrics['response_hand']
-                    )
-                    base_metrics['baseline_force'] = baseline
-
-        
         if run_motor_reaction_time:
             base_metrics['motor_reaction_time'] = fa.motor_reaction_time(
                 stim_time=base_metrics.get('stim_time'), 
@@ -1171,21 +1194,16 @@ def update_trial_data(
             )
         
         if run_motor_response_time:
-         if all(k in base_metrics for k in ['time_to_peak', 'peak_value']):
+         if all(k in base_metrics for k in ['force_onset_time', 'peak_time']):
             mrspt_val = fa.motor_response_time(
-                signal_df=analysis_df,
-                stim_time=base_metrics['stim_time'],
-                peak_time=base_metrics['stim_time'] + base_metrics['time_to_peak'],
-                peak_force=base_metrics['peak_value'],
-                threshold=base_metrics['threshold'],
-                response_hand=base_metrics['response_hand']
+                onset_time=base_metrics.get('force_onset_time'),
+                peak_time=base_metrics.get('peak_time')
             )
             base_metrics['motor_response_time'] = mrspt_val
 
         if run_force_time_integral:
             if all(k in base_metrics for k in ['force_onset_time', 'force_offset_time', 'baseline_force']):
                 mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
-                
                 impulse_metrics = fa.calculate_impulse(
                     signal_df=analysis_df,
                     onset_time=base_metrics.get('force_onset_time'),
@@ -1199,7 +1217,6 @@ def update_trial_data(
         if run_mean_force:
             if all(k in base_metrics for k in ['force_onset_time', 'force_offset_time', 'baseline_force']):
                 mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
-
                 mean_force_metrics = fa.calculate_mean_force(
                     signal_df=analysis_df,
                     onset_time=base_metrics.get('force_onset_time'),
@@ -1209,28 +1226,120 @@ def update_trial_data(
                     response_hand=base_metrics.get('response_hand')
                 )
                 base_metrics.update(mean_force_metrics)
+        
+        if run_rfd:
+            if all(k in base_metrics for k in ['force_onset_time', 'peak_time', 'baseline_force']):
+                rfd_metrics = fa.calculate_rfd(
+                    signal_df=analysis_df,
+                    onset_time=base_metrics.get('force_onset_time'),
+                    peak_time=base_metrics.get('peak_time'),
+                    baseline_force=base_metrics.get('baseline_force'),
+                    response_hand=base_metrics.get('response_hand'),
+                    early_rfd_window_ms=rfd_window_ms
+                )
+                base_metrics.update(rfd_metrics)
+                
+                # Perform normalization for RFD
+                rfd_baseline = rfd_baseline_right if base_metrics.get('response_hand') == 'right' else rfd_baseline_left
+                if rfd_baseline and rfd_baseline > 0:
+                    if 'early_rfd' in base_metrics and base_metrics['early_rfd'] is not None:
+                        base_metrics['early_rfd_pct'] = (base_metrics['early_rfd'] / rfd_baseline) * 100
+                    if 'peak_rfd' in base_metrics and base_metrics['peak_rfd'] is not None:
+                        base_metrics['peak_rfd_pct'] = (base_metrics['peak_rfd'] / rfd_baseline) * 100
 
-    # 5. Final Trial Status Interpretation
-    LATE_RESPONSE_THRESHOLD_S = 1.0 
+    # Final Trial Status Interpretation
+    # ----------------------------------
+    LATE_RESPONSE_THRESHOLD_S = 1.0 # NOTE: This could become a UI input (flagged as late after this)
     if base_metrics['trial_status'] == 'valid':
         mrt_s = base_metrics.get('motor_reaction_time', float('inf')) / 1000.0 if base_metrics.get('motor_reaction_time') is not None else float('inf')
         if mrt_s > LATE_RESPONSE_THRESHOLD_S:
             base_metrics['trial_status'] = 'late_response'
-        elif base_metrics.get('force_offset_time') is not None and base_metrics['force_offset_time'] >= trial_view_df['time'].iloc[-1]:
+        elif base_metrics.get('force_offset_time') is not None and base_metrics.get('force_offset_time') >= trial_view_df['time'].iloc[-1]:
             base_metrics['trial_status'] = 'late_offset'
 
-    # --- Plotting and display logic ---
+    # Plotting and Metrics Display
+    # -----------------------------
     base_metrics['block_trial_str'] = f"Block {selected_block}, Trial {selected_trial}"
     
+    # The plot always uses the user-defined visualization window (trial_view_df)
     fig = create_trial_figure(
         trial_view_df, channel_map, mvc_left, mvc_right, base_metrics,
         run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral
     )
     
-    metrics_layout = dbc.Card(dbc.CardBody([
-        html.P(f"{key.replace('_', ' ').title()}: {value}")
-        for key, value in base_metrics.items() if key != 'block_trial_str'
-    ]))
+    # Helper function to format metrics for the Accordion
+    def create_metric_p(label, key, unit=""):
+        value = base_metrics.get(key)
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return html.P(f"{label}: N/A")
+        if isinstance(value, float):
+            return html.P(f"{label}: {value:.2f} {unit}")
+        return html.P(f"{label}: {value} {unit}")
+
+    # Build Metric Groups
+    key_info_metrics = [
+        create_metric_p("Participant Id", "participant_id"),
+        create_metric_p("Global Index", "global_index"),
+        create_metric_p("Block", "block"),
+        create_metric_p("Trial Status", "trial_status"),
+        create_metric_p("Response Hand", "response_hand"),
+    ]
+    latency_metrics = [
+        create_metric_p("Motor Reaction Time", "motor_reaction_time", "ms"),
+        create_metric_p("Motor Response Time", "motor_response_time", "ms"),
+    ]
+    magnitude_metrics = [
+        create_metric_p("Peak Force", "peak_value", "N"),
+        create_metric_p("Mean Force", "mean_force", "N"),
+        create_metric_p("Overshoot/Undershoot", "delta_threshold", "N"),
+    ]
+    rate_metrics = [
+        create_metric_p(f"Early RFD (0-{rfd_window_ms}ms)", "early_rfd", "N/s"),
+        create_metric_p("Early RFD (% Max)", "early_rfd_pct", "%"),
+        create_metric_p("Peak RFD", "peak_rfd", "N/s"),
+        create_metric_p("Peak RFD (% Max)", "peak_rfd_pct", "%"),
+    ]
+    integral_metrics = [
+        create_metric_p("Impulse (AUC)", "impulse_auc", "N*s"),
+        create_metric_p("Mean Force as %MVC", "impulse_auc_percent_mvc", "%"),
+    ]
+
+    # Build the final Accordion layout
+    metrics_layout = html.Div([
+        dbc.Accordion(
+            [
+                dbc.AccordionItem(
+                    dbc.Card(dbc.CardBody(key_info_metrics)),
+                    title="Key Trial Info",
+                    item_id="item-key-info"
+                ),
+                dbc.AccordionItem(
+                    dbc.Accordion(
+                        [
+                            dbc.AccordionItem(latency_metrics, title="Latencies", item_id="sub-latencies"),
+                            dbc.AccordionItem(magnitude_metrics, title="Force Magnitudes", item_id="sub-magnitudes"),
+                            dbc.AccordionItem(rate_metrics, title="Rates of Force", item_id="sub-rates"),
+                            dbc.AccordionItem(integral_metrics, title="Force-Time Integral", item_id="sub-integral"),
+                        ],
+                        always_open=True,
+                        active_item=["sub-latencies", "sub-magnitudes", "sub-rates"]
+                    ),
+                    title="Force Metrics",
+                    item_id="item-force-metrics"
+                ),
+                dbc.AccordionItem(
+                    [
+                        html.P("PMRT: N/A"),
+                        html.P("RMS: N/A"),
+                    ],
+                    title="EMG Metrics",
+                    item_id="item-emg-metrics"
+                ),
+            ],
+            always_open=True,
+            active_item="item-key-info"
+        )
+    ])
 
     stim_time = base_metrics.get('stim_time')
 
