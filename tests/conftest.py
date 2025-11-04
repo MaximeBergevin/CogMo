@@ -128,7 +128,8 @@ def create_mock_signal_data(
     max_noise: float = 0.5,
     shift_baseline: float = 0.0,
     delay_s: float = 0.5,
-    burst_time_s: float = 0.2
+    burst_time_s: float = 0.2,
+    early_rfd_window_ms: int = 50
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     Generates a DataFrame simulating a segment of force_data for testing.
@@ -208,6 +209,16 @@ def create_mock_signal_data(
         if mvc > 0 and contraction_duration > 0:
             expected_auc_normalized = (expected_auc / contraction_duration) / mvc * 100
 
+    # Calculate ground truth for mean force
+    expected_mean_force = 0.0
+    if n_points > 0:
+        expected_mean_force = np.mean(burst_vals)
+    
+    expected_mean_force_pct = 0.0
+    if mvc > 0:
+        expected_mean_force_pct = (expected_mean_force / mvc) * 100
+
+
     # Calculate 'ground truth' metrics for testing
     # ---------------------------------------------
     expected_metrics = {
@@ -219,7 +230,9 @@ def create_mock_signal_data(
         "expected_offset_time": df.loc[end_index, 'time'] if end_index < n_time_points else np.nan,
         "expected_threshold": threshold,
         "expected_auc": expected_auc,
-        "expected_auc_normalized": expected_auc_normalized
+        "expected_auc_normalized": expected_auc_normalized,
+        "expected_mean_force" : expected_mean_force,
+        "expected_mean_force_pct": expected_mean_force_pct
     }
 
     return df, expected_metrics

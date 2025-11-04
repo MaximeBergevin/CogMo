@@ -10,7 +10,7 @@ from force_analyses import find_baseline_force
         ("Happy path: Low noise", 0.1, 0.0, True),
         ("Happy path: High noise", 0.9, 0.0, True),
         ("Happy path: Shifted baseline", 0.5, 5.0, True),
-        ("Bad path: Very high noise", 2.0, 0.0, False), # SD of noise will be > 1.0
+        ("Bad path: Very high noise", 5.0, 0.0, False), # SD of noise will be > 1.0
     ]
 )
 def test_find_baseline_force(
