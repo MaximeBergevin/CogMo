@@ -63,6 +63,60 @@ def calculate_impulse(
     }
 
 
+def calculate_mean_force(
+    signal_df: pd.DataFrame,
+    onset_time: Optional[float],
+    offset_time: Optional[float],
+    baseline_force: Optional[float],
+    mvc_value: Optional[float],
+    response_hand: str
+) -> Dict[str, Any]:
+    """
+    Computes the mean force/torque over the detected contraction period.
+
+    Uses pre-calculated onset/offset times, subtracts the baseline,
+    and returns the mean plus a %MVC normalization.
+
+    Args:
+        signal_df: DataFrame of the trial segment.
+        onset_time: The time of force/contraction onset (s).
+        offset_time: The time of force/contraction offset (s).
+        baseline_force: The baseline force/torque value to subtract (N or N.m).
+        mvc_value: The MVC value for normalization (%MVC).
+        response_hand: "left" or "right".
+
+    Returns:
+        A dictionary containing the mean_force and mean_force_percent_mvc.
+    """
+    force_col = f"force_{response_hand}"
+
+    # Guard clause: Ensure all necessary inputs are valid
+    if (onset_time is None or offset_time is None or baseline_force is None or
+            offset_time <= onset_time):
+        return {'mean_force': None, 'mean_force_percent_mvc': None}
+
+    # Slice the DataFrame to the exact contraction window
+    contraction_df = signal_df[
+        (signal_df['time'] >= onset_time) & (signal_df['time'] <= offset_time)
+    ].copy()
+
+    # Subtract the baseline force
+    force_corrected = contraction_df[force_col] - baseline_force
+    
+    # Calculate the mean of the baseline-corrected force
+    mean_force = force_corrected.mean()
+    
+    # Normalization by MVC
+    mean_force_percent_mvc = None
+    if mvc_value and mvc_value > 0:
+        mean_force_percent_mvc = (mean_force / mvc_value) * 100
+
+    return {
+        'mean_force': mean_force,
+        'mean_force_percent_mvc': mean_force_percent_mvc
+    }
+
+
 def find_baseline_force(
     signal_df: pd.DataFrame,
     peak_time: float,

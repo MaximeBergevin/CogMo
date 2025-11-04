@@ -1052,14 +1052,16 @@ def handle_trial_navigation(
     State('analysis-peak-force-checkbox', 'value'),
     State('analysis-mrspt-checkbox', 'value'),
     State('analysis-mrt-checkbox', 'value'),
-    State('analysis-fti-checkbox', 'value')
+    State('analysis-fti-checkbox', 'value'),
+    State('analysis-mean-force-checkbox', 'value') # ADDED
 )
 def update_trial_data(
     selected_block, selected_trial, condition_data_dict, session_id,
     channel_map, trial_lookup_dict, pre_window, post_window,
     mvc_left, mvc_right,
     min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
-    run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral
+    run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral,
+    run_mean_force # ADDED
 ):
     """
     This callback runs the full, robust analysis pipeline when the selected trial changes.
@@ -1092,7 +1094,7 @@ def update_trial_data(
         post_window=post_window
     )
 
-    # --- New Unbiased Analysis Pipeline ---
+    # --- Analysis Pipeline ---
     
     # 1. Intelligently find the main contraction event, regardless of hand.
     peak_info = fa.find_main_contraction_peak(
@@ -1110,7 +1112,7 @@ def update_trial_data(
     base_metrics['response_hand'] = peak_info['response_hand']
     
     # 2. If a peak was found, run all subsequent analyses.
-    if peak_info['analysis_df'] is not None:
+    if peak_info['analysis_df'] is not None and base_metrics['response_hand'] is not None:
         analysis_df = peak_info['analysis_df']
         base_metrics['peak_time'] = peak_info['peak_time']
         base_metrics['peak_value'] = peak_info['peak_value']
@@ -1118,47 +1120,58 @@ def update_trial_data(
         base_metrics['time_to_peak'] = peak_info['peak_time'] - base_metrics['stim_time']
 
         # 3. Calculate all other foundational metrics using the clean 'analysis_df'.
-        onset_time = fa.find_contraction_onset(
-            signal_df=analysis_df, stim_time=base_metrics['stim_time'],
-            peak_time=peak_info['peak_time'], response_hand=base_metrics['response_hand']
-        )
-        base_metrics['force_onset_time'] = onset_time
-
-        offset_time = fa.find_contraction_offset(
-            signal_df=analysis_df, peak_time=peak_info['peak_time'],
-            peak_value=peak_info['peak_value'], response_hand=base_metrics['response_hand']
-        )
-        base_metrics['force_offset_time'] = offset_time
         
-        baseline = fa.find_baseline_force(
-            signal_df=analysis_df, peak_time=peak_info['peak_time'],
-            response_hand=base_metrics['response_hand']
-        )
-        base_metrics['baseline_force'] = baseline
-
-        # 4. Calculate final "leaf" metrics that the user explicitly requested.
-        
-        # --- THIS BLOCK IS NOW ADDED BACK AND CORRECTED ---
-        if run_peak_force:
+        # 3a. Calculate foundational metrics needed by other analyses
+        if run_peak_force or run_motor_reaction_time or run_motor_response_time or run_force_time_integral or run_mean_force:
             mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
-            derived_peak_metrics = fa.peak_force_metrics(
+            
+            # Calculate peak metrics (needed by almost everything)
+            peak_metrics = fa.peak_force_metrics(
                 peak_value=base_metrics['peak_value'],
                 peak_time=base_metrics['peak_time'],
                 stim_time=base_metrics['stim_time'],
                 threshold=base_metrics['threshold'],
                 mvc_value=mvc_val
             )
-            base_metrics.update(derived_peak_metrics)
+            base_metrics.update(peak_metrics)
+            
+            if 'time_to_peak' in base_metrics:
+                peak_time = base_metrics['stim_time'] + base_metrics['time_to_peak']
+                
+                if run_motor_reaction_time or run_force_time_integral or run_mean_force:
+                    onset_time = fa.find_contraction_onset(
+                        signal_df=analysis_df,
+                        stim_time=base_metrics['stim_time'],
+                        peak_time=peak_time,
+                        response_hand=base_metrics['response_hand']
+                    )
+                    base_metrics['force_onset_time'] = onset_time
 
+                if run_force_time_integral or run_mean_force:
+                    offset_time = fa.find_contraction_offset(
+                        signal_df=analysis_df,
+                        peak_time=peak_time,
+                        peak_value=base_metrics['peak_force'],
+                        response_hand=base_metrics['response_hand']
+                    )
+                    base_metrics['force_offset_time'] = offset_time
+                    
+                    baseline = fa.find_baseline_force(
+                        signal_df=analysis_df,
+                        peak_time=peak_time,
+                        response_hand=base_metrics['response_hand']
+                    )
+                    base_metrics['baseline_force'] = baseline
+
+        
         if run_motor_reaction_time:
             base_metrics['motor_reaction_time'] = fa.motor_reaction_time(
-                stim_time=base_metrics.get('stim_time'), onset_time=onset_time
+                stim_time=base_metrics.get('stim_time'), 
+                onset_time=base_metrics.get('force_onset_time')
             )
         
         if run_motor_response_time:
-        # This check ensures we have the necessary values from the foundational steps
          if all(k in base_metrics for k in ['time_to_peak', 'peak_value']):
-            # This call now correctly matches the signature of your function
             mrspt_val = fa.motor_response_time(
                 signal_df=analysis_df,
                 stim_time=base_metrics['stim_time'],
@@ -1170,12 +1183,32 @@ def update_trial_data(
             base_metrics['motor_response_time'] = mrspt_val
 
         if run_force_time_integral:
-            mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
-            impulse_metrics = fa.calculate_impulse(
-                signal_df=analysis_df, onset_time=onset_time, offset_time=offset_time,
-                baseline_force=baseline, mvc_value=mvc_val, response_hand=base_metrics.get('response_hand')
-            )
-            base_metrics.update(impulse_metrics)
+            if all(k in base_metrics for k in ['force_onset_time', 'force_offset_time', 'baseline_force']):
+                mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
+                
+                impulse_metrics = fa.calculate_impulse(
+                    signal_df=analysis_df,
+                    onset_time=base_metrics.get('force_onset_time'),
+                    offset_time=base_metrics.get('force_offset_time'),
+                    baseline_force=base_metrics.get('baseline_force'),
+                    mvc_value=mvc_val,
+                    response_hand=base_metrics.get('response_hand')
+                )
+                base_metrics.update(impulse_metrics)
+        
+        if run_mean_force:
+            if all(k in base_metrics for k in ['force_onset_time', 'force_offset_time', 'baseline_force']):
+                mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
+
+                mean_force_metrics = fa.calculate_mean_force(
+                    signal_df=analysis_df,
+                    onset_time=base_metrics.get('force_onset_time'),
+                    offset_time=base_metrics.get('force_offset_time'),
+                    baseline_force=base_metrics.get('baseline_force'),
+                    mvc_value=mvc_val,
+                    response_hand=base_metrics.get('response_hand')
+                )
+                base_metrics.update(mean_force_metrics)
 
     # 5. Final Trial Status Interpretation
     LATE_RESPONSE_THRESHOLD_S = 1.0 
