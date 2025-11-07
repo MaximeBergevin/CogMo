@@ -34,6 +34,9 @@ def test_create_trial_lookup():
 
     result = create_trial_lookup(raw_data)
 
+    # Assertions
+    # ------------
+
     # 1. Output is a DataFrame and is equal to our expected lookup table
     assert isinstance(result, pd.DataFrame)
     assert_frame_equal(result, expected_lookup)

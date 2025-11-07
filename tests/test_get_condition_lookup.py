@@ -13,6 +13,9 @@ def test_get_condition_lookup(mock_condition_data):
     input_df = mock_condition_data
     result  = get_condition_lookup(input_df)
 
+    # Assertions
+    # ------------
+    
     # 1. Check results is a dict
     assert isinstance(result, dict)
 

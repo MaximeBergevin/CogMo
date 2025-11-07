@@ -128,7 +128,8 @@ def create_mock_signal_data(
     max_noise: float = 0.5,
     shift_baseline: float = 0.0,
     delay_s: float = 0.5,
-    burst_time_s: float = 0.2
+    burst_time_s: float = 0.2,
+    early_rfd_window_ms: int = 50
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     Generates a DataFrame simulating a segment of force_data for testing.
@@ -199,6 +200,25 @@ def create_mock_signal_data(
         df.loc[burst_indices, dominant_col] = burst_vals
         df[dominant_col] += shift_baseline
 
+    # Calculate ground truth for AUC
+    expected_auc = 0
+    expected_auc_normalized = 0
+    if len(burst_vals) > 1:
+        expected_auc = np.trapezoid(y=burst_vals, dx=time_increment)
+        contraction_duration = burst_time_s
+        if mvc > 0 and contraction_duration > 0:
+            expected_auc_normalized = (expected_auc / contraction_duration) / mvc * 100
+
+    # Calculate ground truth for mean force
+    expected_mean_force = 0.0
+    if n_points > 0:
+        expected_mean_force = np.mean(burst_vals)
+    
+    expected_mean_force_pct = 0.0
+    if mvc > 0:
+        expected_mean_force_pct = (expected_mean_force / mvc) * 100
+
+
     # Calculate 'ground truth' metrics for testing
     # ---------------------------------------------
     expected_metrics = {
@@ -207,7 +227,12 @@ def create_mock_signal_data(
         "expected_peak_value": peak_force_magnitude,
         "expected_onset_time": df.loc[onset_index, 'time'] if onset_index < n_time_points else np.nan,
         "expected_peak_time": df.loc[onset_index + half - 1, 'time'] if n_points > 0 else np.nan,
-        "expected_threshold": threshold
+        "expected_offset_time": df.loc[end_index, 'time'] if end_index < n_time_points else np.nan,
+        "expected_threshold": threshold,
+        "expected_auc": expected_auc,
+        "expected_auc_normalized": expected_auc_normalized,
+        "expected_mean_force" : expected_mean_force,
+        "expected_mean_force_pct": expected_mean_force_pct
     }
 
     return df, expected_metrics

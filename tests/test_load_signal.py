@@ -22,9 +22,12 @@ def test_load_signal(mock_file_factory):
     # Use fixture to create temp file
     mock_filepath = mock_file_factory(mock_content, 'mock_data.txt')
     # Run function under test
-    with pytest.warns(UserWarning, match="Automatically added 'time' column"):
-        df, comment_summary = load_signal(filepath=mock_filepath)
+    with pytest.warns(UserWarning, match = "Automatically added 'time' column"):
+        df, comment_summary = load_signal(filepath = mock_filepath)
 
+    # Assertions
+    # ------------
+    
     # 1. Check output type
     assert isinstance(df, pd.DataFrame)
     assert isinstance(comment_summary, dict)
