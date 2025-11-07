@@ -39,6 +39,7 @@ from get_condition_lookup import get_condition_lookup
 from data_loader import load_signal, find_best_match
 from trial_segmentation import get_trial_data_and_metrics, get_trial_segment, create_trial_lookup
 import force_analyses as fa
+import emg_analyses as ea
 
 # DEPENDENCIES FILE MANAGEMENT:
 # Requirements.in & requirements.txt (Windows & MacOS)
