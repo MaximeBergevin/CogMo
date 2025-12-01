@@ -29,6 +29,7 @@ import pandas as pd
 from dash import dcc, html, no_update, ctx
 from dash.exceptions import PreventUpdate
 from dash.dependencies import ALL, Input, Output, State
+import numpy as np
 from plotly.subplots import make_subplots
 import plotly.graph_objs as go
 import webview
@@ -90,7 +91,9 @@ def create_trial_figure(
     run_peak_force: bool = False,
     run_motor_response_time: bool = False,
     run_motor_reaction_time: bool = False,
-    run_force_time_integral: bool = False
+    run_force_time_integral: bool = False,
+    run_pmrt: bool = False,
+    run_emg_rms: bool = False
 ):
     """Creates the Plotly figure for the trial viewer, with conditional visualizations."""
     time_col = channel_map.get('time')
@@ -116,21 +119,14 @@ def create_trial_figure(
 
     # --- Layered Plotting Logic ---
     if has_analyzed_segment:
-        # Define a wider window for VISUALIZATION to capture the full EMG event.
-        # Add a 200ms buffer before onset and after offset.
         viz_start_time = onset_time - 0.200
         viz_end_time = offset_time + 0.200
-        
-        # This is the DataFrame for the colored "event window"
         viz_df = trial_segment_df[
             (trial_segment_df[time_col] >= viz_start_time) & (trial_segment_df[time_col] <= viz_end_time)
         ]
         
-        # Layer 1: Plot full traces in gray
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], line=dict(color=COLOR_GRAY), showlegend=False), row=1, col=1)
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], line=dict(color=COLOR_GRAY), showlegend=False), row=1, col=1)
-        
-        # Layer 2: Plot the wider "event window" in color on top
         fig.add_trace(go.Scatter(x=viz_df[time_col], y=viz_df[force_r_col], name='Right Hand', line=dict(color=COLOR_R)), row=1, col=1)
         fig.add_trace(go.Scatter(x=viz_df[time_col], y=viz_df[force_l_col], name='Left Hand', line=dict(color=COLOR_L)), row=1, col=1)
 
@@ -140,14 +136,12 @@ def create_trial_figure(
             fig.add_trace(go.Scatter(x=viz_df[time_col], y=viz_df[emg_r_col], line=dict(width=0.5, color=COLOR_R), showlegend=False), row=2, col=1)
             fig.add_trace(go.Scatter(x=viz_df[time_col], y=viz_df[emg_l_col], line=dict(width=0.5, color=COLOR_L), showlegend=False), row=2, col=1)
     else:
-        # Fallback to original behavior if no segment is analyzed
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], name='Right Hand', line=dict(color=COLOR_R)), row=1, col=1)
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], name='Left Hand', line=dict(color=COLOR_L)), row=1, col=1)
         if include_emg:
             fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col], name='EMG Right', showlegend=False, line=dict(width=0.5, color=COLOR_R)), row=2, col=1)
             fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], name='EMG Left', showlegend=False, line=dict(width=0.5, color=COLOR_L)), row=2, col=1)
 
-    # --- Y-axis labels and all other visualizations ---
     fig.update_yaxes(title_text="Force", range=[0, max_mvc], row=1, col=1)
     if include_emg:
         fig.update_yaxes(title_text="EMG", row=2, col=1)
@@ -160,18 +154,16 @@ def create_trial_figure(
         baseline_force = trial_metrics['baseline_force']
         response_hand = trial_metrics.get('response_hand')
         force_col = f"force_{response_hand}"
-        
         auc_df = trial_segment_df[
             (trial_segment_df[time_col] >= onset_time) & (trial_segment_df[time_col] <= offset_time)
         ].copy()
-        
         fig.add_trace(go.Scatter(
             x=auc_df[time_col], y=auc_df[force_col] - baseline_force,
             fill='tozeroy', mode='none', fillcolor='rgba(40, 167, 69, 0.3)',
             showlegend=False, name='Impulse (AUC)'
         ), row=1, col=1)
 
-    # --- All other markers and annotations ---
+    # --- Force markers ---
     peak_force = trial_metrics.get('peak_force')
     time_to_peak = trial_metrics.get('time_to_peak')
     if run_peak_force and all(v is not None for v in [peak_force, time_to_peak, stim_time, threshold_value]):
@@ -205,7 +197,41 @@ def create_trial_figure(
             name='Force Onset (MRsT)',
             showlegend=False
         ), row=1, col=1)
-        
+
+    # --- EMG onset/offset markers ---
+    emg_onset_time = trial_metrics.get('emg_onset_time')
+    emg_offset_time = trial_metrics.get('emg_offset_time')
+    lower_onset_threshold = trial_metrics.get('emg_onset_threshold')
+
+    if include_emg:
+        if run_pmrt and emg_onset_time is not None:
+            fig.add_trace(go.Scatter(
+                x=[emg_onset_time, emg_onset_time],
+                y=[trial_segment_df[[emg_r_col, emg_l_col]].min().min(), trial_segment_df[[emg_r_col, emg_l_col]].max().max()],
+                mode='lines',
+                line=dict(color='purple', dash='dash', width=1),
+                name='EMG Onset (PMRT)',
+                showlegend=False
+            ), row=2, col=1)
+
+        if run_emg_rms and emg_onset_time is not None and emg_offset_time is not None:
+            fig.add_trace(go.Scatter(
+                x=[emg_onset_time, emg_onset_time],
+                y=[trial_segment_df[[emg_r_col, emg_l_col]].min().min(), trial_segment_df[[emg_r_col, emg_l_col]].max().max()],
+                mode='lines',
+                line=dict(color='purple', dash='dash', width=1),
+                name='EMG Onset',
+                showlegend=False
+            ), row=2, col=1)
+            fig.add_trace(go.Scatter(
+                x=[emg_offset_time, emg_offset_time],
+                y=[trial_segment_df[[emg_r_col, emg_l_col]].min().min(), trial_segment_df[[emg_r_col, emg_l_col]].max().max()],
+                mode='lines',
+                line=dict(color='purple', dash='dash', width=1),
+                name='EMG Offset',
+                showlegend=False
+            ), row=2, col=1)
+
     annotations = []
     if stim_time is not None:
         annotations.append(
@@ -346,12 +372,11 @@ app.layout = dbc.Container([
             label="Analyses Option",
             children=[
                 html.Div([
+                    # --- Force Analyses ---
                     dbc.Row([
-                        # --- Left Column: Force Analyses ---
                         dbc.Col([
                             html.H4("Force Signal Analyses"),
                             html.Hr(),
-                            
                             html.H6("Latencies", className="mt-3"),
                             dbc.Checkbox(id="analysis-mrt-checkbox", label="Motor Reaction Time"),
                             dbc.Checkbox(id="analysis-mrspt-checkbox", label="Motor Response Time"),
@@ -366,21 +391,21 @@ app.layout = dbc.Container([
                             dbc.Checkbox(id="analysis-fti-checkbox", label="Force-Time Integral"),
                         ], width=6),
 
-                        # --- Right Column: EMG Analyses ---
+                        # --- EMG Analyses ---
                         dbc.Col([
                             html.H4("EMG Signal Analyses"),
                             html.Hr(),
-
                             html.H6("Latency", className="mt-3"),
                             dbc.Checkbox(id="analysis-pmrt-checkbox", label="Premotor Reaction Time"),
-                            
                             html.H6("EMG Activity", className="mt-4"),
                             dbc.Checkbox(id="analysis-rms-checkbox", label="Root Mean Square (RMS)"),
                         ], width=6),
                     ]),
+                    
+                    html.Hr(className="my-4"),
 
                     # --- Peak Detection Settings ---
-                    html.H4("Peak Detection Settings"),
+                    html.H4("Force Peak Detection Settings"),
                     dbc.Row([
                         dbc.Col([
                             dbc.Label("Min. Valid Reaction Time (s)"),
@@ -404,11 +429,34 @@ app.layout = dbc.Container([
                         ], width=6, md=3),
                     ]),
                     
+                    html.Hr(className="my-4"),
+                    
+                    # --- EMG Detection Settings ---
+                    html.H4("EMG Burst Detection Settings"),
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label("EMG Min. Duration (ms)"),
+                            dbc.Input(id="emg-min-duration-input", type="number", value=50, step=1),
+                            dbc.Tooltip(
+                                "The minimum time (ms) the signal must stay above or below threshold to be considered a real burst.",
+                                target="emg-min-duration-input",
+                            ),
+                        ], width=6, md=3),
+                        dbc.Col([
+                            dbc.Label("EMG Peak Fraction (%)"),
+                            dbc.Input(id="emg-onset-threshold-input", type="number", value=1.0, step=1),
+                            dbc.Tooltip(
+                                "The percentage of the peak EMG energy used to define the onset threshold.",
+                                target="emg-onset-threshold-input",
+                            ),
+                        ], width=6, md=3),
+                    ]),
+
                     # --- Tooltips for all checkboxes ---
                     dbc.Tooltip("Time from stimulus onset to force onset.", target="analysis-mrt-checkbox"),
                     dbc.Tooltip("Time from force onset to peak force.", target="analysis-mrspt-checkbox"),
                     dbc.Tooltip("The steepest slope of the force curve after force onset.", target="analysis-rfd-checkbox"),
-                    dbc.Tooltip("Time from EMG onset to force onset.", target="analysis-pmrt-checkbox"),
+                    dbc.Tooltip("Time from stimulus onset to EMG onset.", target="analysis-pmrt-checkbox"),
                     dbc.Tooltip("The peak force achieved and the amount it exceeds the target.", target="analysis-peak-force-checkbox"),
                     dbc.Tooltip("The average force during a specified window.", target="analysis-mean-force-checkbox"),
                     dbc.Tooltip("The area under the force-time curve.", target="analysis-fti-checkbox"),
@@ -1037,7 +1085,6 @@ def handle_trial_navigation(
     # --- Triggers ---
     Input('block-selector-dropdown', 'value'),
     Input('trial-selector-dropdown', 'value'),
-    
     # --- Data Sources ---
     State('condition-data-store', 'data'),
     State('signal-data-store', 'data'),
@@ -1063,7 +1110,15 @@ def handle_trial_navigation(
     State('analysis-rfd-checkbox', 'value'),
     State('analysis-rfd-window-input', 'value'),
     State('input-rfd-left', 'value'),
-    State('input-rfd-right', 'value')
+    State('input-rfd-right', 'value'),
+
+    # --- EMG Analysis Checkboxes ---
+    State('analysis-pmrt-checkbox', 'value'),
+    State('analysis-rms-checkbox', 'value'),
+
+    # --- EMG Settings ---
+    State('emg-min-duration-input', 'value'),
+    State('emg-onset-threshold-input', 'value'),
 )
 def update_trial_data(
     selected_block, selected_trial, condition_data_dict, session_id,
@@ -1072,7 +1127,9 @@ def update_trial_data(
     min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
     run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral,
     run_mean_force, run_rfd, rfd_window_ms,
-    rfd_baseline_left, rfd_baseline_right
+    rfd_baseline_left, rfd_baseline_right,
+    run_pmrt, run_emg_rms,
+    min_duration_ms, emg_onset_fraction
 ):
     """
     This is the main "controller" callback for the Trial Viewer.
@@ -1141,7 +1198,6 @@ def update_trial_data(
         base_metrics['time_to_peak'] = peak_info['peak_time'] - base_metrics['stim_time']
 
         # Calculate Foundational Metrics
-        # This block calculates metrics that are pre-requisites for other "leaf" analyses.
         if (run_peak_force or run_motor_reaction_time or run_motor_response_time or 
             run_force_time_integral or run_mean_force or run_rfd):
             
@@ -1163,7 +1219,7 @@ def update_trial_data(
                 offset_time = fa.find_contraction_offset(
                     signal_df=analysis_df,
                     peak_time=peak_time,
-                    peak_value=base_metrics['peak_force'],
+                    peak_value=base_metrics['peak_value'],
                     response_hand=base_metrics['response_hand']
                 )
                 base_metrics['force_offset_time'] = offset_time
@@ -1195,23 +1251,27 @@ def update_trial_data(
             )
         
         if run_motor_response_time:
-         if all(k in base_metrics for k in ['force_onset_time', 'peak_time']):
-            mrspt_val = fa.motor_response_time(
-                onset_time=base_metrics.get('force_onset_time'),
-                peak_time=base_metrics.get('peak_time')
-            )
-            base_metrics['motor_response_time'] = mrspt_val
+            if all(k in base_metrics for k in ['force_onset_time', 'peak_time']):
+                mrspt_val = fa.motor_response_time(
+                    signal_df=analysis_df,
+                    stim_time=base_metrics.get('stim_time'),
+                    peak_time=base_metrics.get('peak_time'),
+                    peak_force=base_metrics.get('peak_value'),
+                    threshold=base_metrics.get('threshold'),
+                    response_hand=base_metrics.get('response_hand')
+                )
+                base_metrics['motor_response_time'] = mrspt_val
 
         if run_force_time_integral:
             if all(k in base_metrics for k in ['force_onset_time', 'force_offset_time', 'baseline_force']):
                 mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
                 impulse_metrics = fa.calculate_impulse(
                     signal_df=analysis_df,
-                    onset_time=base_metrics.get('force_onset_time'),
-                    offset_time=base_metrics.get('force_offset_time'),
-                    baseline_force=base_metrics.get('baseline_force'),
+                    onset_time=base_metrics['force_onset_time'],
+                    offset_time=base_metrics['force_offset_time'],
+                    baseline_force=base_metrics['baseline_force'],
                     mvc_value=mvc_val,
-                    response_hand=base_metrics.get('response_hand')
+                    response_hand=base_metrics['response_hand']
                 )
                 base_metrics.update(impulse_metrics)
         
@@ -1220,11 +1280,11 @@ def update_trial_data(
                 mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
                 mean_force_metrics = fa.calculate_mean_force(
                     signal_df=analysis_df,
-                    onset_time=base_metrics.get('force_onset_time'),
-                    offset_time=base_metrics.get('force_offset_time'),
-                    baseline_force=base_metrics.get('baseline_force'),
+                    onset_time=base_metrics['force_onset_time'],
+                    offset_time=base_metrics['force_offset_time'],
+                    baseline_force=base_metrics['baseline_force'],
                     mvc_value=mvc_val,
-                    response_hand=base_metrics.get('response_hand')
+                    response_hand=base_metrics['response_hand']
                 )
                 base_metrics.update(mean_force_metrics)
         
@@ -1232,10 +1292,10 @@ def update_trial_data(
             if all(k in base_metrics for k in ['force_onset_time', 'peak_time', 'baseline_force']):
                 rfd_metrics = fa.calculate_rfd(
                     signal_df=analysis_df,
-                    onset_time=base_metrics.get('force_onset_time'),
-                    peak_time=base_metrics.get('peak_time'),
-                    baseline_force=base_metrics.get('baseline_force'),
-                    response_hand=base_metrics.get('response_hand'),
+                    onset_time=base_metrics['force_onset_time'],
+                    peak_time=base_metrics['peak_time'],
+                    baseline_force=base_metrics['baseline_force'],
+                    response_hand=base_metrics['response_hand'],
                     early_rfd_window_ms=rfd_window_ms
                 )
                 base_metrics.update(rfd_metrics)
@@ -1248,9 +1308,65 @@ def update_trial_data(
                     if 'peak_rfd' in base_metrics and base_metrics['peak_rfd'] is not None:
                         base_metrics['peak_rfd_pct'] = (base_metrics['peak_rfd'] / rfd_baseline) * 100
 
+        # -----------------------------------------------------------------
+        # EMG Analyses
+        # -----------------------------------------------------------------
+        if (channel_map.get('emg_left') and channel_map.get('emg_right')) and (run_pmrt or run_emg_rms):
+            try:
+                # --- Detect EMG burst onset and offset using CWT (Morlet mother wave) ---
+                if base_metrics['force_onset_time'] is None or base_metrics['force_offset_time'] is None:
+                    viz_df = analysis_df  # using whole analysis window as fallback
+                else:                                 
+                    viz_start_time = base_metrics['force_onset_time'] - 0.200
+                    viz_end_time   = base_metrics['force_offset_time'] + 0.200
+                    time_col = channel_map['time']
+                    viz_df = analysis_df[
+                        (analysis_df[time_col] >= viz_start_time) &
+                        (analysis_df[time_col] <= viz_end_time)
+                    ].copy()
+
+                onset_time, offset_time = ea.find_emg_boundaries(
+                    signal_df=viz_df,
+                    channel_map=channel_map,
+                    min_burst_ms=min_duration_ms,
+                    response_hand=base_metrics['response_hand'],
+                    stim_time=base_metrics['stim_time'],
+                    force_offset_time=base_metrics.get('force_offset_time'),
+                    peak_fraction=emg_onset_fraction,
+                )
+                if onset_time and offset_time:
+                    base_metrics['emg_onset_time'] = onset_time
+                    base_metrics['emg_offset_time'] = offset_time
+
+                    # --- Compute Premotor Reaction Time (PMRT) ---
+                    if run_pmrt:
+                        base_metrics['premotor_reaction_time'] = (onset_time - base_metrics['stim_time']) * 1000
+
+                    # --- Compute RMS amplitude during the detected burst ---
+                    if run_emg_rms:
+                        base_metrics['emg_rms'] = ea.calculate_emg_rms(
+                            full_df=analysis_df,
+                            channel_map=channel_map,
+                            response_hand=base_metrics['response_hand'],
+                            onset_time=onset_time,
+                            offset_time=offset_time
+                        )
+                else:
+                    base_metrics['emg_onset_time'] = None
+                    base_metrics['emg_offset_time'] = None
+                    base_metrics['premotor_reaction_time'] = None
+                    base_metrics['emg_rms'] = None
+
+            except Exception as e:
+                print(f"⚠️ EMG detection error: {e}")
+                base_metrics['emg_onset_time'] = None
+                base_metrics['emg_offset_time'] = None
+                base_metrics['premotor_reaction_time'] = None
+                base_metrics['emg_rms'] = None
+
     # Final Trial Status Interpretation
     # ----------------------------------
-    LATE_RESPONSE_THRESHOLD_S = 1.0 # NOTE: This could become a UI input (flagged as late after this)
+    LATE_RESPONSE_THRESHOLD_S = 1.0
     if base_metrics['trial_status'] == 'valid':
         mrt_s = base_metrics.get('motor_reaction_time', float('inf')) / 1000.0 if base_metrics.get('motor_reaction_time') is not None else float('inf')
         if mrt_s > LATE_RESPONSE_THRESHOLD_S:
@@ -1262,13 +1378,16 @@ def update_trial_data(
     # -----------------------------
     base_metrics['block_trial_str'] = f"Block {selected_block}, Trial {selected_trial}"
     
-    # The plot always uses the user-defined visualization window (trial_view_df)
     fig = create_trial_figure(
-        trial_view_df, channel_map, mvc_left, mvc_right, base_metrics,
-        run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral
-    )
+    trial_view_df, channel_map, mvc_left, mvc_right, base_metrics,
+    run_peak_force=run_peak_force,
+    run_motor_response_time=run_motor_response_time,
+    run_motor_reaction_time=run_motor_reaction_time,
+    run_force_time_integral=run_force_time_integral,
+    run_pmrt=run_pmrt,
+    run_emg_rms=run_emg_rms
+)
     
-    # Helper function to format metrics for the Accordion
     def create_metric_p(label, key, unit=""):
         value = base_metrics.get(key)
         if value is None or (isinstance(value, float) and pd.isna(value)):
@@ -1277,7 +1396,6 @@ def update_trial_data(
             return html.P(f"{label}: {value:.2f} {unit}")
         return html.P(f"{label}: {value} {unit}")
 
-    # Build Metric Groups
     key_info_metrics = [
         create_metric_p("Participant Id", "participant_id"),
         create_metric_p("Global Index", "global_index"),
@@ -1304,8 +1422,11 @@ def update_trial_data(
         create_metric_p("Impulse (AUC)", "impulse_auc", "N*s"),
         create_metric_p("Mean Force as %MVC", "impulse_auc_percent_mvc", "%"),
     ]
+    emg_metrics = [
+        create_metric_p("Premotor Reaction Time", "premotor_reaction_time", "ms"),
+        create_metric_p("EMG RMS", "emg_rms", "a.u."),
+    ]
 
-    # Build the final Accordion layout
     metrics_layout = html.Div([
         dbc.Accordion(
             [
@@ -1329,10 +1450,7 @@ def update_trial_data(
                     item_id="item-force-metrics"
                 ),
                 dbc.AccordionItem(
-                    [
-                        html.P("PMRT: N/A"),
-                        html.P("RMS: N/A"),
-                    ],
+                    emg_metrics,
                     title="EMG Metrics",
                     item_id="item-emg-metrics"
                 ),
