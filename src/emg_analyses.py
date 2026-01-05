@@ -93,50 +93,70 @@ def find_emg_boundaries(
     stim_time: float,
     force_offset_time: float,
     min_burst_ms: int,
-    threshold: float,
+    threshold: float,  # This is the 'final_threshold' (Max of 15SD or 0.5% Peak)
 ) -> Tuple[Optional[float], Optional[float], float]:
+    """
+    Detects EMG onset and offset using TKEO with a Force-Anchored Lookahead.
+    Bridges mid-burst dips by checking if energy returns to 'threshold' before force ends.
+    """
     time = signal_df[signal_df.columns[0]].values
     fs = 1.0 / np.mean(np.diff(time))
     emg_col = channel_map.get(f"emg_{response_hand}")
     
-    # 1. Conditioning
+    # 1. Conditioning Pipeline
     raw_signal = signal_df[emg_col].values.astype(float) - np.mean(signal_df[emg_col].values)
+    # Using 50Hz low-pass for the envelope to maintain ballistic sharpness
     envelope = _condition_tkeo(raw_signal, fs, lp_cutoff=50.0)
 
-    # 2. Define Window Size (Consistency is key here)
-    win_size = int(0.010 * fs) # 10ms window
+    # 2. Define Search Windows
+    win_size = int(0.010 * fs) # 10ms onset window
     search_start = np.searchsorted(time, stim_time + 0.030)
     end_idx = np.searchsorted(time, force_offset_time)
     
+    # 3. Detect Onset (80% Density above Threshold)
     above = (envelope > threshold).astype(int)
-    
-    # 3. Detect Onset (80% Density)
-    # Mode 'valid' means the result array starts at search_start
     check_on = np.convolve(above[search_start:end_idx], np.ones(win_size), mode='valid')
     onsets = np.where(check_on >= (win_size * 0.8))[0]
 
-    if len(onsets) == 0: return None, None, threshold
+    if len(onsets) == 0: 
+        return None, None, threshold
     
-    # CRITICAL FIX: onsets[0] is the end of the first successful window.
-    # We subtract win_size to point to the START of the crossing
     onset_idx = search_start + onsets[0]
     
-    # Optional but recommended: Backward search to the "foot" of the rise
+    # Backward search to the 'foot' of the rise for precision
     while onset_idx > search_start and envelope[onset_idx] > (threshold * 0.5):
         onset_idx -= 1
         
-    # 4. Detect Offset (40ms Window)
-    off_win = int(0.040 * fs)
+    # 4. Detect Offset with Dip-Bridging Lookahead
+    off_win = int(0.040 * fs) # 40ms silence window
     peak_idx = onset_idx + np.argmax(envelope[onset_idx:end_idx])
-    below = (envelope < (threshold * 0.75)).astype(int)
     
+    # Identify all points below threshold
+    below = (envelope < threshold).astype(int)
     check_off = np.convolve(below[peak_idx:end_idx], np.ones(off_win), mode='valid')
-    offsets = np.where(check_off >= (off_win * 0.8))[0]
+    offset_candidates = np.where(check_off >= (off_win * 0.9))[0]
     
-    # Snap offset to the start of the quiet period
-    offset_idx = (peak_idx + offsets[0]) if len(offsets) > 0 else end_idx
-    
-    return time[onset_idx], time[offset_idx], threshold
+    # Default to force offset if no clear EMG offset is found
+    final_offset_idx = end_idx 
+
+    for cand in offset_candidates:
+        candidate_idx = peak_idx + cand
+        
+        # BRIDGE LOGIC: Look ahead from this candidate to the Force Offset
+        lookahead_zone = envelope[candidate_idx:end_idx]
+        
+        if len(lookahead_zone) == 0:
+            final_offset_idx = candidate_idx
+            break
+            
+        # If the energy NEVER pops back above the threshold before force ends, 
+        # then this candidate is the true offset.
+        # If it DOES pop back up, we ignore this candidate and keep looking.
+        if not np.any(lookahead_zone > threshold):
+            final_offset_idx = candidate_idx
+            break
+
+    return time[onset_idx], time[final_offset_idx], threshold
 
 def calculate_emg_rms(
     full_df: pd.DataFrame,
