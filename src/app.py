@@ -554,6 +554,7 @@ app.layout.children.append(dcc.Store(id = 'rfd-left-store'))
 app.layout.children.append(dcc.Store(id = 'rfd-right-store'))
 app.layout.children.append(dcc.Store(id = 'force-channels-store'))
 app.layout.children.append(dcc.Store(id = 'emg-channels-store'))
+THRESHOLD_CACHE = {} # EMG threshold cache
 # Navigation system
 # ---------------------------------------------------
 app.layout.children.append(dcc.Store(id = 'ui-generator-signal-store'))
@@ -1311,12 +1312,24 @@ def update_trial_data(
         # -----------------------------------------------------------------
         # EMG Analyses
         # -----------------------------------------------------------------
+        
         if (channel_map.get('emg_left') and channel_map.get('emg_right')) and (run_pmrt or run_emg_rms):
             try:
-                # --- Detect EMG burst onset and offset using CWT (Morlet mother wave) ---
+                # 1. Calculate Local Dynamic Threshold (Quietest 100ms within this specific trial)
+                # Using h_multiplier=15 for robust ballistic detection
+                current_threshold = ea.calculate_dynamic_threshold(
+                    full_df=analysis_df,
+                    channel_map=channel_map,
+                    response_hand=base_metrics['response_hand'],
+                    duration_sec=0.1,  # 100ms quiet window search
+                    h_multiplier=15.0   # Solnik-recommended multiplier
+                )
+
+                # 2. Define the search window based on force metrics
                 if base_metrics['force_onset_time'] is None or base_metrics['force_offset_time'] is None:
-                    viz_df = analysis_df  # using whole analysis window as fallback
+                    viz_df = analysis_df
                 else:                                 
+                    # Buffer window: -200ms before force onset to +200ms after force offset
                     viz_start_time = base_metrics['force_onset_time'] - 0.200
                     viz_end_time   = base_metrics['force_offset_time'] + 0.200
                     time_col = channel_map['time']
@@ -1325,24 +1338,27 @@ def update_trial_data(
                         (analysis_df[time_col] <= viz_end_time)
                     ].copy()
 
-                onset_time, offset_time = ea.find_emg_boundaries(
+                # 3. Detect EMG boundaries using the calculated TKEO threshold
+                onset_time, offset_time, active_threshold = ea.find_emg_boundaries(
                     signal_df=viz_df,
                     channel_map=channel_map,
-                    min_burst_ms=min_duration_ms,
                     response_hand=base_metrics['response_hand'],
                     stim_time=base_metrics['stim_time'],
                     force_offset_time=base_metrics.get('force_offset_time'),
-                    peak_fraction=emg_onset_fraction,
+                    min_burst_ms=min_duration_ms,
+                    threshold=current_threshold, # Pass the dynamic local threshold
                 )
+
                 if onset_time and offset_time:
                     base_metrics['emg_onset_time'] = onset_time
                     base_metrics['emg_offset_time'] = offset_time
+                    base_metrics['emg_threshold'] = active_threshold # Helpful for debugging viz
 
-                    # --- Compute Premotor Reaction Time (PMRT) ---
+                    # 4. Compute PMRT (Stimulus -> EMG Onset)
                     if run_pmrt:
                         base_metrics['premotor_reaction_time'] = (onset_time - base_metrics['stim_time']) * 1000
 
-                    # --- Compute RMS amplitude during the detected burst ---
+                    # 5. Compute RMS amplitude
                     if run_emg_rms:
                         base_metrics['emg_rms'] = ea.calculate_emg_rms(
                             full_df=analysis_df,
@@ -1358,7 +1374,7 @@ def update_trial_data(
                     base_metrics['emg_rms'] = None
 
             except Exception as e:
-                print(f"⚠️ EMG detection error: {e}")
+                print(f"⚠️ TKEO EMG detection error: {e}")
                 base_metrics['emg_onset_time'] = None
                 base_metrics['emg_offset_time'] = None
                 base_metrics['premotor_reaction_time'] = None
