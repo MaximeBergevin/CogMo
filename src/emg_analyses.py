@@ -39,34 +39,35 @@ def calculate_dynamic_threshold(
     full_df: pd.DataFrame,
     channel_map: Dict[str, str],
     response_hand: str,
-    duration_sec: float = 0.1,  # Now 100ms instead of 1.0s
-    h_multiplier: float = 15.0  # Reset to Solnik standard
+    duration_sec: float = 0.1,
+    h_multiplier: float = 15.0
 ) -> float:
     """
-    Finds the quietest 100ms window within the current trial to set a local baseline.
+    Calculates a local TKEO threshold by finding the quietest 100ms window 
+    within the trial and applying a user-defined SD multiplier (h).
     """
     emg_col = channel_map.get(f"emg_{response_hand}")
     if emg_col is None or emg_col not in full_df.columns:
         return 999.0
     
+    # Pre-processing: Remove DC offset
     raw_signal = full_df[emg_col].values.astype(float)
-    raw_signal -= np.mean(raw_signal)  # Remove DC offset
+    raw_signal -= np.mean(raw_signal)
     
     time_col = full_df.columns[0]
     fs = 1.0 / np.mean(np.diff(full_df[time_col].values))
     
-    # Process through TKEO pipeline (using 50Hz for baseline detection)
+    # Process through TKEO pipeline (50Hz for threshold detection)
     envelope = _condition_tkeo(raw_signal, fs, lp_cutoff=50.0)
     
-    # Search for Quietest 100ms Window
+    # Search for Quietest 100ms Window (Rolling Variance)
     window_samples = int(duration_sec * fs)
-    stride = 10  # Smaller stride for higher precision in a local trial
+    stride = 10 
     
     if window_samples > len(envelope):
         window_samples = len(envelope) // 4
 
     env_series = pd.Series(envelope)
-    # Finding the window with the lowest variance ensures we avoid the burst
     rolling_var = env_series.rolling(window_samples, step=stride).var()
     
     quiet_end_idx = rolling_var.idxmin()
@@ -75,12 +76,12 @@ def calculate_dynamic_threshold(
     
     quiet_slice = envelope[int(quiet_end_idx) - window_samples : int(quiet_end_idx)]
     
-    # Mean + 15*SD
+    # Calculate Mean + h*SD using user input
     mean_val = np.mean(quiet_slice)
     std_val = np.std(quiet_slice)
     calculated_threshold = mean_val + (h_multiplier * std_val)
     
-    # Safety Floor: 0.5% of trial peak
+    # Safety Floor: Ensure threshold is at least 0.5% of trial peak (should rarely trigger)
     trial_peak = np.max(envelope)
     final_threshold = max(calculated_threshold, trial_peak * 0.005)
     
@@ -93,23 +94,22 @@ def find_emg_boundaries(
     stim_time: float,
     force_offset_time: float,
     min_burst_ms: int,
-    threshold: float,  # This is the 'final_threshold' (Max of 15SD or 0.5% Peak)
+    threshold: float,
 ) -> Tuple[Optional[float], Optional[float], float]:
     """
-    Detects EMG onset and offset using TKEO with a Force-Anchored Lookahead.
-    Bridges mid-burst dips by checking if energy returns to 'threshold' before force ends.
+    Detects EMG onset and offset. Uses a 'Last Candidate' lookahead to bridge
+    dips while ensuring the burst remains functionally tied to force output.
     """
     time = signal_df[signal_df.columns[0]].values
     fs = 1.0 / np.mean(np.diff(time))
     emg_col = channel_map.get(f"emg_{response_hand}")
     
-    # 1. Conditioning Pipeline
+    # 1. Conditioning (50Hz Lowpass for sharp ballistic envelopes)
     raw_signal = signal_df[emg_col].values.astype(float) - np.mean(signal_df[emg_col].values)
-    # Using 50Hz low-pass for the envelope to maintain ballistic sharpness
     envelope = _condition_tkeo(raw_signal, fs, lp_cutoff=50.0)
 
-    # 2. Define Search Windows
-    win_size = int(0.010 * fs) # 10ms onset window
+    # 2. Search Windows
+    win_size = int(0.010 * fs) # 10ms density check
     search_start = np.searchsorted(time, stim_time + 0.030)
     end_idx = np.searchsorted(time, force_offset_time)
     
@@ -123,38 +123,33 @@ def find_emg_boundaries(
     
     onset_idx = search_start + onsets[0]
     
-    # Backward search to the 'foot' of the rise for precision
+    # Backward search to the 'foot' of the rise
     while onset_idx > search_start and envelope[onset_idx] > (threshold * 0.5):
         onset_idx -= 1
         
-    # 4. Detect Offset with Dip-Bridging Lookahead
+    # 4. Detect Offset with Last Valid Candidate Lookahead
     off_win = int(0.040 * fs) # 40ms silence window
     peak_idx = onset_idx + np.argmax(envelope[onset_idx:end_idx])
-    
-    # Identify all points below threshold
     below = (envelope < threshold).astype(int)
+    
     check_off = np.convolve(below[peak_idx:end_idx], np.ones(off_win), mode='valid')
     offset_candidates = np.where(check_off >= (off_win * 0.9))[0]
     
-    # Default to force offset if no clear EMG offset is found
     final_offset_idx = end_idx 
 
     for cand in offset_candidates:
         candidate_idx = peak_idx + cand
-        
-        # BRIDGE LOGIC: Look ahead from this candidate to the Force Offset
         lookahead_zone = envelope[candidate_idx:end_idx]
         
-        if len(lookahead_zone) == 0:
+        # Accept candidate only if signal stays below threshold until force ends
+        if len(lookahead_zone) == 0 or not np.any(lookahead_zone > threshold):
             final_offset_idx = candidate_idx
-            break
-            
-        # If the energy NEVER pops back above the threshold before force ends, 
-        # then this candidate is the true offset.
-        # If it DOES pop back up, we ignore this candidate and keep looking.
-        if not np.any(lookahead_zone > threshold):
-            final_offset_idx = candidate_idx
-            break
+            # We continue looping to find the absolute LAST valid silence window
+
+    # 5. Final Duration Validation
+    duration_ms = (time[final_offset_idx] - time[onset_idx]) * 1000
+    if duration_ms < min_burst_ms:
+        return None, None, threshold
 
     return time[onset_idx], time[final_offset_idx], threshold
 
