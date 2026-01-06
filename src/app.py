@@ -435,18 +435,26 @@ app.layout = dbc.Container([
                     html.H4("EMG Burst Detection Settings"),
                     dbc.Row([
                         dbc.Col([
-                            dbc.Label("EMG SD Multiplier (h)"),
-                            dbc.Input(id="emg-h-multiplier-input", type="number", value=15.0, step=1),
+                            dbc.Label("Onset SD (h-on)"),
+                            dbc.Input(id="emg-h-onset-input", type="number", value=15.0, step=1),
                             dbc.Tooltip(
-                                "The number of Standard Deviations (σ) above the baseline mean to set the threshold. Default is 15.",
-                                target="emg-h-multiplier-input",
+                                "Multiplier for onset threshold (mean + σ from local quietest noise). Lower values are more sensitive (earlier onset).",
+                                target="emg-h-onset-input",
                             ),
                         ], width=6, md=3),
                         dbc.Col([
-                            dbc.Label("EMG Min. Duration (ms)"),
+                            dbc.Label("Offset SD (h-off)"),
+                            dbc.Input(id="emg-h-offset-input", type="number", value=25.0, step=1),
+                            dbc.Tooltip(
+                                "Multiplier for offset threshold (mean + σ from local quietest noise). Higher values prevent offset 'bleeding' into post-contraction noise.",
+                                target="emg-h-offset-input",
+                            ),
+                        ], width=6, md=3),
+                        dbc.Col([
+                            dbc.Label("Min. Duration (ms)"),
                             dbc.Input(id="emg-min-duration-input", type="number", value=10, step=1),
                             dbc.Tooltip(
-                                "The minimum time (ms) the signal must consistently stay above threshold to be considered a real onset.",
+                                "Minimal duration for a valid EMG burst.",
                                 target="emg-min-duration-input",
                             ),
                         ], width=6, md=3),
@@ -1116,10 +1124,10 @@ def handle_trial_navigation(
     # --- EMG Analysis Checkboxes ---
     State('analysis-pmrt-checkbox', 'value'),
     State('analysis-rms-checkbox', 'value'),
-
     # --- EMG Settings ---
     State('emg-min-duration-input', 'value'),
-    State('emg-h-multiplier-input', 'value'),
+    State('emg-h-onset-input', 'value'), 
+    State('emg-h-offset-input', 'value')
 )
 def update_trial_data(
     selected_block, selected_trial, condition_data_dict, session_id,
@@ -1130,7 +1138,7 @@ def update_trial_data(
     run_mean_force, run_rfd, rfd_window_ms,
     rfd_baseline_left, rfd_baseline_right,
     run_pmrt, run_emg_rms,
-    emg_min_duration_ms, emg_h_multiplier   
+    emg_min_duration_ms, emg_h_onset, emg_h_offset
 ):
     """
     This is the main "controller" callback for the Trial Viewer.
@@ -1315,13 +1323,21 @@ def update_trial_data(
         
         if (channel_map.get('emg_left') and channel_map.get('emg_right')) and (run_pmrt or run_emg_rms):
             try:
-                # 1. Calculate Local Dynamic Threshold using the USER-DEFINED h-multiplier
-                current_threshold = ea.calculate_dynamic_threshold(
+                # 1. Calculate Local Dynamic Thresholds for BOTH onset and offset
+                onset_threshold = ea.calculate_dynamic_threshold(
                     full_df=analysis_df,
                     channel_map=channel_map,
                     response_hand=base_metrics['response_hand'],
                     duration_sec=0.1,  
-                    h_multiplier=emg_h_multiplier   # <--- Link to 'emg-h-multiplier-input'
+                    h_multiplier=emg_h_onset if emg_h_onset is not None else 15.0 # From UI
+                )
+                
+                offset_threshold = ea.calculate_dynamic_threshold(
+                    full_df=analysis_df,
+                    channel_map=channel_map,
+                    response_hand=base_metrics['response_hand'],
+                    duration_sec=0.1,  
+                    h_multiplier=emg_h_offset if emg_h_offset is not None else 25.0 # From UI
                 )
 
                 # 2. Define the search window based on force metrics
@@ -1336,21 +1352,24 @@ def update_trial_data(
                         (analysis_df[time_col] <= viz_end_time)
                     ].copy()
 
-                # 3. Detect EMG boundaries using the NEW min_duration
+                # 3. Detect EMG boundaries using DUAL thresholds
                 onset_time, offset_time, active_threshold = ea.find_emg_boundaries(
                     signal_df=viz_df,
                     channel_map=channel_map,
                     response_hand=base_metrics['response_hand'],
                     stim_time=base_metrics['stim_time'],
+                    force_onset_time=base_metrics.get('force_onset_time'),
                     force_offset_time=base_metrics.get('force_offset_time'),
-                    min_burst_ms=emg_min_duration_ms,
-                    threshold=current_threshold, 
+                    min_burst_ms=emg_min_duration_ms if emg_min_duration_ms is not None else 10,
+                    threshold_on=onset_threshold,  # Pass onset threshold
+                    threshold_off=offset_threshold # Pass offset threshold
                 )
 
                 if onset_time and offset_time:
                     base_metrics['emg_onset_time'] = onset_time
                     base_metrics['emg_offset_time'] = offset_time
-                    base_metrics['emg_threshold'] = active_threshold # Helpful for debugging viz
+                    # Store onset threshold for the graph visualization
+                    base_metrics['emg_threshold'] = onset_threshold 
 
                     # 4. Compute PMRT (Stimulus -> EMG Onset)
                     if run_pmrt:

@@ -19,7 +19,6 @@ def _condition_tkeo(raw_signal: np.ndarray, fs: float, lp_cutoff: float = 50.0) 
     filtered = signal.filtfilt(b_band, a_band, raw_signal)
     
     # 2. TKEO Calculation: x[n]^2 - x[n-1]*x[n+1]
-    # We shift the array to compute the operator across the whole signal
     tkeo_raw = filtered[1:-1]**2 - (filtered[:-2] * filtered[2:])
     
     # 3. Rectify & Pad
@@ -92,66 +91,70 @@ def find_emg_boundaries(
     channel_map: Dict[str, str],
     response_hand: str,
     stim_time: float,
+    force_onset_time: float,
     force_offset_time: float,
     min_burst_ms: int,
-    threshold: float,
+    threshold_on: float, 
+    threshold_off: float, 
 ) -> Tuple[Optional[float], Optional[float], float]:
-    """
-    Detects EMG onset and offset. Uses a 'Last Candidate' lookahead to bridge
-    dips while ensuring the burst remains functionally tied to force output.
-    """
     time = signal_df[signal_df.columns[0]].values
     fs = 1.0 / np.mean(np.diff(time))
     emg_col = channel_map.get(f"emg_{response_hand}")
     
-    # 1. Conditioning (50Hz Lowpass for sharp ballistic envelopes)
+    # 1. Conditioning
     raw_signal = signal_df[emg_col].values.astype(float) - np.mean(signal_df[emg_col].values)
     envelope = _condition_tkeo(raw_signal, fs, lp_cutoff=50.0)
 
     # 2. Search Windows
-    win_size = int(0.010 * fs) # 10ms density check
     search_start = np.searchsorted(time, stim_time + 0.030)
-    end_idx = np.searchsorted(time, force_offset_time)
+    force_on_idx = np.searchsorted(time, force_onset_time)
+    force_off_idx = np.searchsorted(time, force_offset_time)
     
-    # 3. Detect Onset (80% Density above Threshold)
-    above = (envelope > threshold).astype(int)
-    check_on = np.convolve(above[search_start:end_idx], np.ones(win_size), mode='valid')
-    onsets = np.where(check_on >= (win_size * 0.8))[0]
+    # Global Peak Check (Safety)
+    peak_idx = search_start + np.argmax(envelope[search_start:force_off_idx])
+    if envelope[peak_idx] < threshold_on:
+        return None, None, threshold_on
 
-    if len(onsets) == 0: 
-        return None, None, threshold
+    # 3. ONSET: Backward Search from Force Onset using THRESHOLD_ON
+    above_on = (envelope > threshold_on).astype(int)
+    gap_limit_on = int(0.025 * fs) # 25ms bridge
     
-    onset_idx = search_start + onsets[0]
+    pre_force_activity = np.where(above_on[search_start:force_on_idx] == 1)[0]
     
-    # Backward search to the 'foot' of the rise
-    while onset_idx > search_start and envelope[onset_idx] > (threshold * 0.5):
-        onset_idx -= 1
-        
-    # 4. Detect Offset with Last Valid Candidate Lookahead
-    off_win = int(0.040 * fs) # 40ms silence window
-    peak_idx = onset_idx + np.argmax(envelope[onset_idx:end_idx])
-    below = (envelope < threshold).astype(int)
-    
-    check_off = np.convolve(below[peak_idx:end_idx], np.ones(off_win), mode='valid')
-    offset_candidates = np.where(check_off >= (off_win * 0.9))[0]
-    
-    final_offset_idx = end_idx 
+    if len(pre_force_activity) == 0:
+        # Fallback if no activity found before force rise
+        fwd_activity = np.where(above_on[search_start:force_off_idx] == 1)[0]
+        if len(fwd_activity) == 0: return None, None, threshold_on
+        onset_idx = search_start + fwd_activity[0]
+    else:
+        current_on = search_start + pre_force_activity[-1]
+        for i in range(len(pre_force_activity) - 2, -1, -1):
+            earlier = search_start + pre_force_activity[i]
+            if (current_on - earlier) <= gap_limit_on:
+                current_on = earlier
+            else: break
+        onset_idx = current_on
 
-    for cand in offset_candidates:
-        candidate_idx = peak_idx + cand
-        lookahead_zone = envelope[candidate_idx:end_idx]
-        
-        # Accept candidate only if signal stays below threshold until force ends
-        if len(lookahead_zone) == 0 or not np.any(lookahead_zone > threshold):
-            final_offset_idx = candidate_idx
-            # We continue looping to find the absolute LAST valid silence window
+    # 4. OFFSET: Backward Search from Force Offset using THRESHOLD_OFF
+    above_off = (envelope > threshold_off).astype(int)
+    win_off = int(0.020 * fs) # 20ms stability window
+    
+    final_offset_idx = force_off_idx # Default
+    
+    # Iterate from force_offset back toward the onset
+    for i in range(force_off_idx, onset_idx + win_off, -1):
+        window = above_off[i - win_off : i]
+        # If 50% of the window is above the strict threshold, we've found the burst tail
+        if np.mean(window) >= 0.5:
+            final_offset_idx = i
+            break
 
-    # 5. Final Duration Validation
+    # 5. Validation
     duration_ms = (time[final_offset_idx] - time[onset_idx]) * 1000
     if duration_ms < min_burst_ms:
-        return None, None, threshold
+        return None, None, threshold_on
 
-    return time[onset_idx], time[final_offset_idx], threshold
+    return time[onset_idx], time[final_offset_idx], threshold_on
 
 def calculate_emg_rms(
     full_df: pd.DataFrame,
