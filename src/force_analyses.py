@@ -497,7 +497,7 @@ def motor_reaction_time(
     # Return None if onset was not detected or occurred before the stimulus
     if onset_time is None or onset_time < stim_time:
         return None
-    
+   
     # Calculate motor reaction time in ms
     motor_rt_ms = int(round((onset_time - stim_time) * 1000))
     

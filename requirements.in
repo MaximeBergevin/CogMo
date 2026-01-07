@@ -2,6 +2,7 @@ dash
 dash-bootstrap-components
 numpy
 pandas
+NeuroKit2
 pyarrow
 pyinstaller
 pytest
