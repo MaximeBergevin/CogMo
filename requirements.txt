@@ -1,0 +1,14 @@
+# Core Dash Web Framework
+dash
+dash-bootstrap-components
+
+# Scientific Computing & Signal Processing
+numpy
+pandas
+scipy
+
+# Optimized Data Loading
+pyarrow
+
+# Utilities
+pathlib

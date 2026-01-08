@@ -11,7 +11,6 @@
 # ----------------------------------------------------
 import base64
 import io
-import tempfile
 import os
 from pathlib import Path
 import re
@@ -35,7 +34,8 @@ import numpy as np
 import pandas as pd
 from plotly.subplots import make_subplots
 import plotly.graph_objs as go
-import webview
+import webbrowser
+from threading import Timer
 
 # Local Application Imports
 #---------------------------
@@ -1738,30 +1738,17 @@ def handle_bulk_metrics_download(
 # ==============================================================================
 # --- MAIN APP EXECUTION ---
 # ==============================================================================
-def run_app_server():
-    # Note: debug=False is important for packaged apps
-    app.run(debug=False) 
-
-def on_closing():
-    # Clean up temporary files and directories when the app is closed
+def clean_temp_dir():
     app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
     if app_temp_dir.exists():
         shutil.rmtree(app_temp_dir, ignore_errors=True)
+    app_temp_dir.mkdir(parents=True, exist_ok=True)
+
+def open_browser():
+    webbrowser.open_new("http://127.0.0.1:8050")
 
 if __name__ == '__main__':
-    # Run the Dash server in a separate thread
-    server_thread = threading.Thread(target=run_app_server)
-    server_thread.daemon = True
-    server_thread.start()
-
-    # Create and start the pywebview window
-    window = webview.create_window(
-        'CogMo Toolkit', 
-        'http://127.0.0.1:8050/',
-        width=1000,
-        height=750
-    )
-
-    window.events.closing += on_closing
-
-    webview.start()
+    clean_temp_dir()
+    # Timer ensures the server is actually up before the browser tries to hit it
+    Timer(1.5, open_browser).start()
+    app.run(debug=False, host='127.0.0.1', port=8050)
