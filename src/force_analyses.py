@@ -16,21 +16,10 @@ def calculate_impulse(
     response_hand: str
 ) -> Dict[str, Any]:
     """
-    Computes impulse (Force/Torque-Time Integral) over the contraction period.
-
-    Uses pre-calculated onset/offset times to bound the contraction, subtracts
-    the pre-calculated baseline, then integrates using the trapezoidal rule.
-
-    Args:
-        signal_df: DataFrame of the trial segment.
-        onset_time: The time of force/contraction onset (s).
-        offset_time: The time of force/contraction offset (s).
-        baseline_force: The baseline force/torque value to subtract (N or N.m).
-        mvc_value: The MVC value for normalization (%MVC).
-        response_hand: "left" or "right".
-
-    Returns:
-        A dictionary containing the impulse ('auc') and its normalized value.
+    Calculates the Force-Time Integral (Impulse) during the contraction.
+    
+    The impulse is calculated as the area under the baseline-corrected force curve 
+    using the trapezoidal rule. It represents the total force generated over time.
     """
     force_col = f"force_{response_hand}"
 
@@ -39,12 +28,12 @@ def calculate_impulse(
             offset_time <= onset_time):
         return {'impulse_auc': None, 'impulse_auc_percent_mvc': None}
 
-    # Slice the DataFrame to the exact contraction window
+    # Slice data to the specific contraction window (Onset to Offset)
     contraction_df = signal_df[
         (signal_df['time'] >= onset_time) & (signal_df['time'] <= offset_time)
     ].copy()
 
-    # Subtract the baseline force to rectify the signal
+    # Rectify the signal by subtracting the pre-calculated baseline
     contraction_df['force_corrected'] = contraction_df[force_col] - baseline_force
     
     # Calculate Area Under the Curve (Impulse) using NumPy's trapezoidal rule
@@ -72,21 +61,7 @@ def calculate_mean_force(
     response_hand: str
 ) -> Dict[str, Any]:
     """
-    Computes the mean force/torque over the detected contraction period.
-
-    Uses pre-calculated onset/offset times, subtracts the baseline,
-    and returns the mean plus a %MVC normalization.
-
-    Args:
-        signal_df: DataFrame of the trial segment.
-        onset_time: The time of force/contraction onset (s).
-        offset_time: The time of force/contraction offset (s).
-        baseline_force: The baseline force/torque value to subtract (N or N.m).
-        mvc_value: The MVC value for normalization (%MVC).
-        response_hand: "left" or "right".
-
-    Returns:
-        A dictionary containing the mean_force and mean_force_percent_mvc.
+    Computes the average baseline-corrected force over the contraction duration.
     """
     force_col = f"force_{response_hand}"
 
@@ -126,7 +101,10 @@ def calculate_rfd(
     early_rfd_window_ms: int
 ) -> Dict[str, Any]:
     """
-    Computes Early RFD (over a fixed window) and Peak RFD (max slope).
+    Calculates Rate of Force Development (RFD) metrics.
+    
+    1. Early RFD: The slope of the force rise over a fixed window (e.g., 0-50ms).
+    2. Peak RFD: The maximum instantaneous slope found within a 20ms sliding window.
     """
     force_col = f"force_{response_hand}"
 
@@ -202,19 +180,11 @@ def find_baseline_force(
     response_hand: str
 ) -> Optional[float]:
     """
-    Computes baseline force using an iterative, drift-correcting pre-peak window.
-
-    Searches 50ms windows before the peak, shifting earlier or later based on
-    signal drift, until a stable window (SD <= 1.0) is found, then returns
-    the mean force of that window.
-
-    Args:
-        signal_df: DataFrame of the trial segment.
-        peak_time: Time of peak force (s), pre-calculated.
-        response_hand: "left" or "right".
-
-    Returns:
-        The baseline force value, or None if not found.
+    Identifies a stable pre-contraction baseline via iterative window searching.
+    
+    The algorithm searches 50ms windows before the peak. If the standard deviation 
+    is high (> 1.0), it shifts the window to avoid signal drift or early onset 
+    interference until a stable mean is found.
     """
     force_col = f"force_{response_hand}"
 
@@ -268,19 +238,10 @@ def find_contraction_offset(
     response_hand: str
 ) -> Optional[float]:
     """
-    Computes contraction offset time based on a stable post-peak baseline.
-
-    Finds a stable 50ms post-peak window, sets a threshold (mean + 3*SD),
-    and returns the first time point after the peak where force falls below it.
-
-    Args:
-        signal_df: DataFrame of the trial segment.
-        peak_time: Time of peak force (s), pre-calculated.
-        peak_value: Value of peak force (N), pre-calculated.
-        response_hand: "left" or "right".
-
-    Returns:
-        The time (in seconds) of contraction offset, or None if not detected.
+    Identifies the end of the force contraction (offset).
+    
+    Finds a stable post-peak baseline and sets a threshold (Mean + 3*SD). The 
+    offset is the first point after the peak where force returns below this threshold.
     """
     force_col = f"force_{response_hand}"
 
@@ -343,13 +304,10 @@ def find_contraction_onset(
     response_hand: str
 ) -> Optional[float]:
     """
-    Computes contraction onset time based on a stable pre-peak baseline.
-
-    Finds a stable 50ms pre-peak baseline window, sets a threshold (mean + 3*SD),
-    then scans backward from the peak to find the last time force <= threshold.
-
-    Returns:
-        The time (in seconds) of contraction onset, or None if not detected.
+    Identifies the start of the force contraction (onset).
+    
+    Logic follows the same iterative thresholding as offset detection, but 
+    scans backward from the peak to find the last point where force was at baseline.
     """
     force_col = f"force_{response_hand}"
     
@@ -414,9 +372,11 @@ def find_main_contraction_peak(
     search_window_post_s: float
 ) -> Dict[str, Any]:
     """
-    Intelligently finds the primary contraction peak on EITHER hand.
-    Returns a dictionary with the peak's properties, the determined response hand,
-    and a dynamically sliced analysis DataFrame centered around the peak.
+    Determines the responding hand and identifies the primary contraction peak.
+    
+    Uses SciPy's peak detection on both force channels. Selection priority:
+    1. The earliest valid peak following the minimum reaction time (RT) boundary.
+    2. If no valid peak exists, the latest 'false start' peak before the RT boundary.
     """
     force_r_col = channel_map.get('force_right')
     force_l_col = channel_map.get('force_left')
@@ -492,7 +452,7 @@ def motor_reaction_time(
     onset_time: Optional[float]
 ) -> Optional[int]:
     """
-    Calculates motor reaction time (stimulus to onset) in milliseconds.
+    Calculates time from stimulus to force onset in milliseconds.
     """
     # Return None if onset was not detected or occurred before the stimulus
     if onset_time is None or onset_time < stim_time:
@@ -513,20 +473,7 @@ def motor_response_time(
     response_hand: str
 ) -> Optional[int]:
     """
-    Computes motor response time (force onset to peak force).
-
-    Finds the last time point at or below the force threshold before the peak.
-
-    Args:
-        signal_df: DataFrame of the trial segment.
-        stim_time: Stimulus onset time (s).
-        peak_time: Time of peak force (s), pre-calculated.
-        peak_force: Value of peak force (N), pre-calculated.
-        threshold: Force threshold (N), pre-calculated.
-        response_hand: "left" or "right".
-
-    Returns:
-        Motor response time in milliseconds, or None if not found.
+    Calculates time from stimulus to the point where force crossed the threshold.
     """
     if response_hand not in ['left', 'right'] or threshold is None:
         return None
@@ -565,8 +512,7 @@ def peak_force_metrics(
     mvc_value: float
 ) -> Dict[str, Any]:
     """
-    Calculates derived peak force metrics (overshoot, %MVC, etc.)
-    from an already-identified peak.
+    Calculates secondary metrics related to peak magnitude and accuracy.
     """
     # 1. Time to Peak
     time_to_peak = peak_time - stim_time
