@@ -6,4 +6,5 @@ plotly
 pywebview
 scipy
 pyarrow
-# Note: pyarrow is required for your .feather loading
+pyinstaller
+pytest
