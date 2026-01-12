@@ -43,4 +43,4 @@ jobs:
       # TODO: Translate unit tests from R to python
       - name: Run Unit Tests
         run: |
-          pytest
+          python -m pytest
