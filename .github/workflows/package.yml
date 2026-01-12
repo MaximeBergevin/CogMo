@@ -38,7 +38,7 @@ jobs:
       - name: Generate Windows Requirements
         if: matrix.os == 'windows-latest'
         run: |
-          pip-compile requirements.ini -o requirements_windows.txt
+          pip-compile requirements.in -o requirements_windows.txt
           pip install -r requirements_windows.txt
 
       - name: Install Mac Requirements
