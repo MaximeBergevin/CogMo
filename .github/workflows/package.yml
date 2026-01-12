@@ -48,8 +48,7 @@ jobs:
 
       - name: PyInstaller Build
         run: |
-          # Ensure this matches your .spec filename exactly
-          python -m PyInstaller CogMoToolkit.spec --clean
+          python -m PyInstaller CogMo.spec --clean
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
