@@ -34,9 +34,8 @@ jobs:
           
       - name: Install and Compile Dependencies
         run: |
-         # Pre use_pep517 bullshit. Getting an error otherwise. Don't upgrade pip !
-          python -m pip install --upgrade "pip==23.3.1" "setuptools==68.2.2" "pip-tools==6.13.0"
-          pip-compile requirements.in -o requirements_linux.txt
+          python -m pip install --upgrade pip setuptools wheel pip-tools
+          pip-compile requirements.ini -o requirements_linux.txt
           pip install -r requirements_linux.txt
           pip install -e .
       
