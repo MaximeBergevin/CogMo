@@ -13,13 +13,11 @@ import base64
 import io
 import os
 from pathlib import Path
-import re
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import uuid
-import warnings
 from pathlib import Path
 
 # Third-Party Dependencies
@@ -33,6 +31,7 @@ from dash.dependencies import ALL, Input, Output, State
 import numpy as np
 import pandas as pd
 from plotly.subplots import make_subplots
+import PyInstaller
 import plotly.graph_objs as go
 import webbrowser
 from threading import Timer
@@ -56,6 +55,9 @@ import emg_analyses as ea
 # Windows:
 #  Update/freeze: pip-compile requirements.in -o requirements_windows.txt
 #  Install:       pip install -r requirements_windows.txt
+
+# TO DEPLOY WITH PYINSTALLER:
+# pyinstaller CogMo.spec --clean --log-level DEBUG
 # ----------------------------------------------------
 
 # Initialize the Dash app with Bootstrap theme
@@ -272,6 +274,16 @@ def create_trial_figure(
     )
     
     return fig
+
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return Path(os.path.join(base_path, relative_path))
 
 
 # ==============================================================================
@@ -1266,13 +1278,11 @@ def update_trial_data(
                 # Apply zero-phase Butterworth filter to the full dataset
                 full_df[force_col] = fa.apply_force_filter(
                     full_df[force_col].values,
-                    fs = 2000,
                     cutoff = force_cutoff_hz
                 )
                 # Also update the view dataframe for consistent plotting
                 trial_view_df[force_col] = fa.apply_force_filter(
                     trial_view_df[force_col].values,
-                    fs = 2000,
                     cutoff= force_cutoff_hz
                 )
 
@@ -1299,7 +1309,7 @@ def update_trial_data(
     if peak_info['analysis_df'] is not None and base_metrics['response_hand'] is not None:
         
         # Use the dynamically centered analysis window from the peak finder
-        analysis_df = peak_info['analysis_df']
+        analysis_df = peak_info['analysis_df'].copy()
         
         # Store the found peak info
         base_metrics['peak_time'] = peak_info['peak_time']
