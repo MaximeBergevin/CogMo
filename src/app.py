@@ -458,6 +458,34 @@ app.layout = dbc.Container([
                     ]),
                     
                     html.Hr(className="my-4"),
+
+                    # --- Signal Processing Settings ---
+                    html.H4("Force Signal Processing"),
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label("Apply Low-Pass Filter"),
+                            dbc.Checklist(
+                                options=[{"label": "Enable Zero-Phase Butterworth", "value": 1}],
+                                value=[],
+                                id="force-filter-check",
+                                switch=True,
+                            ),
+                            dbc.Tooltip("Filters high-frequency noise without shifting the signal in time (non-causal).", target="force-filter-check"),
+                        ], width=6, md=4),
+                        dbc.Col([
+                            dbc.Label("Cutoff Frequency (Hz)"),
+                            dbc.Input(
+                                id="force-cutoff-input", 
+                                type="number", 
+                                value=50, 
+                                step=1,
+                                disabled=True # Greayed out by default
+                            ),
+                            dbc.Tooltip("Low pass frequency threshold", target="force-cutoff-input"),
+                        ], width=6, md=2),
+                    ]),
+
+                    html.Hr(className="my-4"),
                     
                     # --- EMG Detection Settings ---
                     html.H4("EMG Burst Detection Settings"),
@@ -996,6 +1024,17 @@ def toggle_rfd_input_disabled(is_checked):
     """
     return not is_checked
 
+# Callback to enable/disable the Force Cutoff Frequency input
+# --------------------------------------------------------------
+@app.callback(
+    Output("force-cutoff-input", "disabled"),
+    Input("force-filter-check", "value")
+)
+def toggle_cutoff_sensitivity(filter_value):
+    # If the list is empty ([]) or None, return True to keep it disabled
+    # If it has [1], return False to enable it
+    return not bool(filter_value)
+
 
 # Callback for block navigation
 # ------------------------------
@@ -1133,6 +1172,9 @@ def handle_trial_navigation(
     # --- Triggers ---
     Input('block-selector-dropdown', 'value'),
     Input('trial-selector-dropdown', 'value'),
+       # Force signal processing ---
+    Input('force-filter-check', 'value'),
+    Input('force-cutoff-input', 'value'),
     # --- Data Sources ---
     State('condition-data-store', 'data'),
     State('signal-data-store', 'data'),
@@ -1165,11 +1207,11 @@ def handle_trial_navigation(
     State('analysis-rms-checkbox', 'value'),
     # --- EMG Settings ---
     State('emg-min-duration-input', 'value'),
-    State('emg-h-onset-input', 'value'), 
-    State('emg-h-offset-input', 'value')
+    State('emg-h-onset-input', 'value'),
+    State('emg-h-offset-input', 'value'),
 )
 def update_trial_data(
-    selected_block, selected_trial, condition_data_dict, session_id,
+    selected_block, selected_trial, force_filter_val, force_cutoff_hz, condition_data_dict, session_id,
     channel_map, trial_lookup_dict, pre_window, post_window,
     mvc_left, mvc_right,
     min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
@@ -1213,6 +1255,26 @@ def update_trial_data(
         pre_window=pre_window,
         post_window=post_window
     )
+    # Determine filterering state
+    is_filter_enabled = 1 in (force_filter_val or [])
+    # Process both full dataframe and trial view dataframe
+    if is_filter_enabled and force_cutoff_hz:
+        # Determine which hand's force to filter based on available channels
+        for hand in ['right', 'left']:
+            force_col = channel_map.get(f'force_{hand}')
+            if force_col and force_col in full_df.columns:
+                # Apply zero-phase Butterworth filter to the full dataset
+                full_df[force_col] = fa.apply_force_filter(
+                    full_df[force_col].values,
+                    fs = 2000,
+                    cutoff = force_cutoff_hz
+                )
+                # Also update the view dataframe for consistent plotting
+                trial_view_df[force_col] = fa.apply_force_filter(
+                    trial_view_df[force_col].values,
+                    fs = 2000,
+                    cutoff= force_cutoff_hz
+                )
 
     #  Analysis Pipeline
     # --------------------------

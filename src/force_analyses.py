@@ -6,6 +6,23 @@ import pandas as pd
 import numpy as np
 from scipy import signal
 
+def apply_force_filter(force_data, fs=2000, cutoff=50, order=4):
+    """
+    Applies a zero-phase Butterworth low-pass filter to a force array.
+    Non-causal (filtfilt) ensures no time-shift in the onset or peak.
+    """
+    if force_data is None or len(force_data) < 27: # filtfilt needs enough padding
+        return force_data
+        
+    nyquist = 0.5 * fs
+    normal_cutoff = cutoff / nyquist
+    
+    # Generate coefficients
+    b, a = signal.butter(order, normal_cutoff, btype='low', analog=False)
+    
+    # Zero-phase application
+    return signal.filtfilt(b, a, force_data)
+
 
 def calculate_impulse(
     signal_df: pd.DataFrame,
