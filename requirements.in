@@ -1,10 +1,9 @@
 dash
 dash-bootstrap-components
-numpy
 pandas
-NeuroKit2
-pyarrow
-pytest
-pytest-mock
+numpy
+plotly
 pywebview
 scipy
+pyarrow
+# Note: pyarrow is required for your .feather loading

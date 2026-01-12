@@ -3,7 +3,6 @@
 import re
 import warnings
 from pathlib import Path
-from typing import Optional
 # Third-Party Dependencies
 # ----------------------------------------------------
 import pandas as pd
