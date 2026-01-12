@@ -4,7 +4,6 @@ numpy
 pandas
 NeuroKit2
 pyarrow
-pyinstaller
 pytest
 pytest-mock
 pywebview

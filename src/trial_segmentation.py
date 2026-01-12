@@ -7,17 +7,30 @@ from typing import Optional, Tuple, Dict, Any
 # ==============================================================================
 
 def create_trial_lookup(data: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """Builds a trial lookup table to map a global trial index to a block/trial number."""
+    """
+    Generates a master index mapping every trial to its respective block and number.
+    
+    This table allows the application to jump to any trial (e.g., Trial 45) by 
+    calculating its 'global_index', regardless of which block it belongs to.
+    """
     if 'is_trial_start' not in data.columns:
         return None
+    # Isolate rows where a new trial begins and drop duplicates to get unique trial IDs
     unique_trials = data[data['is_trial_start'] == True].drop_duplicates(
         subset=['block_number', 'trial_number']
     ).copy()
+    # Assign a continuous index (1 to N) for easy navigation
     unique_trials['global_index'] = range(1, len(unique_trials) + 1)
     return unique_trials[['global_index', 'block_number', 'trial_number']].reset_index(drop=True)
 
+
 def _resolve_col(df: pd.DataFrame, pattern: str) -> Optional[str]:
-    """Finds the first column in a DataFrame that matches a regex pattern, case-insensitively."""
+    """
+    Identifies a column name using regular expression (regex) patterns.
+    
+    This provides flexibility if the input data headers vary slightly (e.g., 
+    'ParticipantID' vs 'part_id'). It searches case-insensitively.
+    """
     for col in df.columns:
         if re.search(pattern, col, re.IGNORECASE):
             return col
@@ -32,9 +45,10 @@ def get_trial_segment(
     post_window: float
 ) -> pd.DataFrame:
     """
-    MODULAR FUNCTION 1:
-    Slices a segment of raw data from the full DataFrame around the stimulus time.
-    Its ONLY job is to slice the data.
+    Slices a specific time-window of data from the full session.
+    
+    This function isolates the raw signal surrounding a stimulus event based on 
+    user-defined 'Pre-Stim' and 'Post-Stim' parameters.
     """
     time_mask = (
         (full_df[time_col] >= stim_time - pre_window) & 
@@ -52,24 +66,28 @@ def analyze_trial_metrics(
     mvc_right: float
 ) -> Dict[str, Any]:
     """
-    MODULAR FUNCTION 2:
-    Calculates all single-value metrics from a given trial segment and related info.
-    Its ONLY job is to perform analysis.
+    Extracts foundational metadata and demands for a specific trial.
+    
+    Logic:
+    1. Determines initial responding hand based on peak force in the segment.
+    2. Uses regex to find condition columns (Motor vs. Cognitive demand).
+    3. Calculates the target force threshold based on MVC and motor demand.
     """
     # Map channel names
     force_r_col = channel_map.get('force_right')
     force_l_col = channel_map.get('force_left')
 
-    # Get actual and expected responses
+    # Determine hand based on simple maximum peak in this segment
     peak_force_right = trial_segment_df[force_r_col].max()
     peak_force_left = trial_segment_df[force_l_col].max()
     response_hand = 'right' if peak_force_right > peak_force_left else 'left'
     
+    # Locate Expected Response column (e.g., 'expected_hand' or 'stimulus_left')
     expected_pattern = r"(?=.*(expected|response|direction|hand|stimulus(?!_time)))(?=.*(left|right|l|r))"
     expected_col = _resolve_col(stim_row, expected_pattern)
     expected_response = stim_row[expected_col].iloc[0] if expected_col else None
 
-    # Get condition info
+    # Resolve demand columns from the condition metadata
     motor_col = _resolve_col(condition_row.to_frame().T, 'motor|phys')
     cog_col = _resolve_col(condition_row.to_frame().T, 'cognitive|cog|mental')
     id_col = _resolve_col(condition_row.to_frame().T, 'part|id')
@@ -78,14 +96,16 @@ def analyze_trial_metrics(
     cognitive_demand = condition_row.get(cog_col) if cog_col else None
     participant_id = condition_row.get(id_col) if id_col else None
 
-    # Compute threshold
+    # Threshold Calculation: MVC * Demand Percentage
     threshold = None
     mvc_value = mvc_right if response_hand == 'right' else mvc_left
     if motor_demand is not None and mvc_value is not None:
         try:
+            # If demand is a direct multiplier (e.g., 0.15 for 15% MVC)
             multiplier = float(motor_demand)
             threshold = multiplier * mvc_value
         except (ValueError, TypeError):
+            # Fallback for categorical demand labels
             motor_demand_str = str(motor_demand).lower()
             if 'low' in motor_demand_str:
                 threshold = 0.05 * mvc_value
@@ -122,10 +142,16 @@ def get_trial_data_and_metrics(
     post_window: float
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
-    1. Get the slice of data for the USER'S VIEW.
-    2. Gather the BASE METRICS (stim_time, threshold, etc.) needed to START the main analysis pipeline.
+    The primary entry point for the Trial Viewer.
+    
+    Execution Flow:
+    1. Identifies the Block and Trial number from the global index.
+    2. Locates the exact timestamp (stim_time) where the trial began.
+    3. Slices the raw data for visual display (trial_view_df).
+    4. Calculates 'Base Metrics' (ID, Demand, Threshold) required for the 
+       subsequent analysis pipeline.
     """
-    # 1. Find the trial and its essential info
+    # Find trial coordinates in the lookup table
     trial_info_row = trial_lookup.query(f'global_index == @trial_index')
     if trial_info_row.empty:
         raise ValueError(f"Trial index {trial_index} not found.")
@@ -133,6 +159,7 @@ def get_trial_data_and_metrics(
     block_numb = int(trial_info_row['block_number'].iloc[0])
     trial_numb = int(trial_info_row['trial_number'].iloc[0])
 
+    # Find the specific row in the full dataset marking the trial start
     stim_row = full_df.query(f"block_number == {block_numb} & trial_number == {trial_numb} & is_trial_start == True")
     if stim_row.empty:
         raise ValueError(f"Stimulus row not found for block {block_numb}, trial {trial_numb}.")
@@ -140,10 +167,10 @@ def get_trial_data_and_metrics(
     time_col = channel_map.get('time')
     stim_time = stim_row[time_col].iloc[0]
     
-    # 2. Get the user's visualization DataFrame using the view parameters
+    # Find the specific row in the full dataset marking the trial start
     trial_view_df = get_trial_segment(full_df, stim_time, time_col, pre_window, post_window)
 
-    # 3. Gather the initial "base_metrics" needed for the main analysis
+    # Resolve metadata from the condition spreadsheet
     condition_row = condition_data.iloc[block_numb - 1]
     
     motor_col = _resolve_col(condition_row.to_frame().T, 'motor|phys')
@@ -152,13 +179,12 @@ def get_trial_data_and_metrics(
     
     motor_demand = condition_row.get(motor_col) if motor_col else None
     
-    # This is a naive first guess for response_hand, which will be overwritten by the smart analysis.
-    # It's only used here to calculate an initial threshold.
+    # Initial hand determination used solely to establish the force threshold
     force_r_col = channel_map.get('force_right')
     force_l_col = channel_map.get('force_left')
-    # BUG FIX: Use the sliced trial_view_df, not the full_df, to get a local max.
     initial_response_hand = 'right' if trial_view_df[force_r_col].max() > trial_view_df[force_l_col].max() else 'left'
     
+    # Establish target force threshold
     threshold = None
     mvc_value = mvc_right if initial_response_hand == 'right' else mvc_left
     if motor_demand is not None and mvc_value is not None:

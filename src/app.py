@@ -12,13 +12,12 @@
 import base64
 import io
 import os
-import re
+from pathlib import Path
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import uuid
-import warnings
 from pathlib import Path
 
 # Third-Party Dependencies
@@ -26,13 +25,16 @@ from pathlib import Path
 import dash
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import dcc, html, no_update, ctx
+from dash import dcc, html, no_update, ctx, Input, Output, State
 from dash.exceptions import PreventUpdate
 from dash.dependencies import ALL, Input, Output, State
 import numpy as np
+import pandas as pd
 from plotly.subplots import make_subplots
+import PyInstaller
 import plotly.graph_objs as go
-import webview
+import webbrowser
+from threading import Timer
 
 # Local Application Imports
 #---------------------------
@@ -53,6 +55,9 @@ import emg_analyses as ea
 # Windows:
 #  Update/freeze: pip-compile requirements.in -o requirements_windows.txt
 #  Install:       pip install -r requirements_windows.txt
+
+# TO DEPLOY WITH PYINSTALLER:
+# pyinstaller CogMo.spec --clean --log-level DEBUG
 # ----------------------------------------------------
 
 # Initialize the Dash app with Bootstrap theme
@@ -64,6 +69,12 @@ app = dash.Dash(__name__,
 # ==============================================================================
 # --- UPLOAD BUTTONS ---
 # ==============================================================================
+# We define these styles as dictionaries to allow for easy manipulation via 
+# Dash Callbacks. By switching the 'style' property of a dcc.Upload component, 
+# provide immediate visual confirmation of file processing success or failure.
+
+
+# BASELINE STYLE: default dashed box look for the app
 DEFAULT_UPLOAD_STYLE = {
     'height' : '60px',
     'lineHeight' : '60px',
@@ -73,12 +84,13 @@ DEFAULT_UPLOAD_STYLE = {
     'textAlign' : 'center',
 }
 
-# New style for successful uploads
+# SUCCESS STATE: Applied when the CSV is parsed and trial_lookup is built
 SUCCESS_UPLOAD_STYLE = DEFAULT_UPLOAD_STYLE.copy()
 SUCCESS_UPLOAD_STYLE['borderColor'] = 'green'
 SUCCESS_UPLOAD_STYLE['backgroundColor'] = '#F0FFF0'
 
-# New style for failed uploads
+# ERROR STATE: Applied if parsing fails (e.g., missing headers or bad encoding)
+ERROR_UPLOAD_STYLE = DEFAULT_UPLOAD_STYLE.copy()
 ERROR_UPLOAD_STYLE = DEFAULT_UPLOAD_STYLE.copy()
 ERROR_UPLOAD_STYLE['borderColor'] = 'red'
 
@@ -95,7 +107,16 @@ def create_trial_figure(
     run_pmrt: bool = False,
     run_emg_rms: bool = False
 ):
-    """Creates the Plotly figure for the trial viewer, with conditional visualizations."""
+    """
+    Constructs a synchronized Force and EMG plot using Plotly Subplots.
+    
+    Visualization Strategy:
+    1. Layered Traces: Full trial data is drawn in light gray (background context), 
+       while the focus window (+/- 200ms around contraction) is in high-contrast colors.
+    2. Shared X-Axes: Force and EMG subplots are linked for synchronized zooming/panning.
+    3. Analytical Overlays: Vertical markers for reaction times and shaded area for impulse.
+    """
+    # --- Signal & Mapping Setup ---
     time_col = channel_map.get('time')
     force_r_col = channel_map.get('force_right')
     force_l_col = channel_map.get('force_left')
@@ -103,49 +124,58 @@ def create_trial_figure(
     emg_l_col = channel_map.get('emg_left')
     include_emg = bool(emg_r_col and emg_l_col)
 
-    COLOR_R = 'blue'
-    COLOR_L = 'goldenrod'
-    COLOR_GRAY = '#D3D3D3'
+    # Styling constants for consistency across the app
+    COLOR_R, COLOR_L, COLOR_GRAY = 'blue', 'goldenrod', '#D3D3D3'
     max_mvc = max(mvc_left, mvc_right) if mvc_left and mvc_right else 1
+    
+    # Metadata for annotations and boundaries
     threshold_value = trial_metrics.get('threshold')
     selected_trial = trial_metrics.get('block_trial_str', 'Trial')
     stim_time = trial_metrics.get('stim_time')
-
     onset_time = trial_metrics.get('force_onset_time')
     offset_time = trial_metrics.get('force_offset_time')
     has_analyzed_segment = onset_time is not None and offset_time is not None
 
+    # --- Subplot Initialization ---
     fig = make_subplots(rows=2 if include_emg else 1, cols=1, shared_xaxes=True, vertical_spacing=0.05)
 
-    # --- Layered Plotting Logic ---
+    # --- Trace Plotting (Context vs. Focus) ---
     if has_analyzed_segment:
+        # Define the window to 'highlight' in color
         viz_start_time = onset_time - 0.200
         viz_end_time = offset_time + 0.200
         viz_df = trial_segment_df[
             (trial_segment_df[time_col] >= viz_start_time) & (trial_segment_df[time_col] <= viz_end_time)
         ]
         
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], line=dict(color=COLOR_GRAY), showlegend=False), row=1, col=1)
-        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], line=dict(color=COLOR_GRAY), showlegend=False), row=1, col=1)
+        # Plot gray background (entire trial)
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], name = "Out of bound", line=dict(color=COLOR_GRAY), showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], name = "Out of bound", line=dict(color=COLOR_GRAY), showlegend=False), row=1, col=1)
+        
+        # Plot colored foreground (active segment only)
         fig.add_trace(go.Scatter(x=viz_df[time_col], y=viz_df[force_r_col], name='Right Hand', line=dict(color=COLOR_R)), row=1, col=1)
         fig.add_trace(go.Scatter(x=viz_df[time_col], y=viz_df[force_l_col], name='Left Hand', line=dict(color=COLOR_L)), row=1, col=1)
 
         if include_emg:
-            fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col], line=dict(width=0.5, color=COLOR_GRAY), showlegend=False), row=2, col=1)
-            fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], line=dict(width=0.5, color=COLOR_GRAY), showlegend=False), row=2, col=1)
-            fig.add_trace(go.Scatter(x=viz_df[time_col], y=viz_df[emg_r_col], line=dict(width=0.5, color=COLOR_R), showlegend=False), row=2, col=1)
-            fig.add_trace(go.Scatter(x=viz_df[time_col], y=viz_df[emg_l_col], line=dict(width=0.5, color=COLOR_L), showlegend=False), row=2, col=1)
+            # Synchronized EMG context/focus layering
+            fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col], name = "Out of bound", line=dict(width=0.5, color=COLOR_GRAY), showlegend=False), row=2, col=1)
+            fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], name = "Out of bound", line=dict(width=0.5, color=COLOR_GRAY), showlegend=False), row=2, col=1)
+            fig.add_trace(go.Scatter(x=viz_df[time_col], y=viz_df[emg_r_col], name = "EMG Right", line=dict(width=0.5, color=COLOR_R), showlegend=False), row=2, col=1)
+            fig.add_trace(go.Scatter(x=viz_df[time_col], y=viz_df[emg_l_col], name = "EMG Left", line=dict(width=0.5, color=COLOR_L), showlegend=False), row=2, col=1)
     else:
+        # Default view when analysis hasn't run or failed
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_r_col], name='Right Hand', line=dict(color=COLOR_R)), row=1, col=1)
         fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[force_l_col], name='Left Hand', line=dict(color=COLOR_L)), row=1, col=1)
         if include_emg:
             fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_r_col], name='EMG Right', showlegend=False, line=dict(width=0.5, color=COLOR_R)), row=2, col=1)
             fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], name='EMG Left', showlegend=False, line=dict(width=0.5, color=COLOR_L)), row=2, col=1)
 
+    # --- Subplot Axes Configuration ---
     fig.update_yaxes(title_text="Force", range=[0, max_mvc], row=1, col=1)
     if include_emg:
         fig.update_yaxes(title_text="EMG", row=2, col=1)
 
+    # Global Force Threshold Line (Visual sanity check for MRT/MRsT)
     if threshold_value is not None:
         fig.add_hline(y=threshold_value, line_dash="dash", line_color="grey", row=1, col=1)
 
@@ -154,119 +184,127 @@ def create_trial_figure(
         baseline_force = trial_metrics['baseline_force']
         response_hand = trial_metrics.get('response_hand')
         force_col = f"force_{response_hand}"
+        
         auc_df = trial_segment_df[
             (trial_segment_df[time_col] >= onset_time) & (trial_segment_df[time_col] <= offset_time)
         ].copy()
+
+        # Invisible Baseline Trace (floor for the fill)
         fig.add_trace(go.Scatter(
-            x=auc_df[time_col], y=auc_df[force_col] - baseline_force,
-            fill='tozeroy', mode='none', fillcolor='rgba(40, 167, 69, 0.3)',
-            showlegend=False, name='Impulse (AUC)'
+            x=auc_df[time_col], y=[baseline_force] * len(auc_df),
+            line=dict(width=0), showlegend=False, hoverinfo='skip'
         ), row=1, col=1)
 
-    # --- Force markers ---
+        # Fill from the Force curve down to the baseline trace
+        fig.add_trace(go.Scatter(
+            x=auc_df[time_col], y=auc_df[force_col],
+            fill='tonexty', mode='lines', line=dict(width=0),
+            fillcolor='rgba(40, 167, 69, 0.3)', showlegend=False, name='Impulse (AUC)'
+        ), row=1, col=1)
+
+    # --- Force Analysis Markers ---
     peak_force = trial_metrics.get('peak_force')
     time_to_peak = trial_metrics.get('time_to_peak')
     if run_peak_force and all(v is not None for v in [peak_force, time_to_peak, stim_time, threshold_value]):
         peak_time = stim_time + time_to_peak
         fig.add_trace(go.Scatter(
-            x=[peak_time, peak_time], y=[threshold_value, peak_force],
+            x=[peak_time, peak_time], y=[threshold_value, peak_force], name = "Δ threshold",
             mode='lines', line=dict(color='red', dash='dash', width=1),
             showlegend=False
         ), row=1, col=1)
 
+    # MRT vs MRsT: Different algorithms for identifying the start of force production
     mrt = trial_metrics.get('motor_reaction_time')
     if run_motor_reaction_time and all(v is not None for v in [mrt, stim_time, threshold_value]):
-        force_onset_time = stim_time + (mrt / 1000.0)
+        f_onset_mrt = stim_time + (mrt / 1000.0)
         fig.add_trace(go.Scatter(
-            x=[force_onset_time, force_onset_time],
-            y=[0, threshold_value],
-            mode='lines',
-            line=dict(color='orange', dash='dash', width=1),
-            name='Force Onset (MRT)',
-            showlegend=False
+            x=[f_onset_mrt, f_onset_mrt], y=[0, threshold_value],
+            mode='lines', line=dict(color='orange', dash='dash', width=1),
+            name='Reaction time', showlegend=False
         ), row=1, col=1)
 
     mrspt = trial_metrics.get('motor_response_time')
     if run_motor_response_time and all(v is not None for v in [mrspt, stim_time, threshold_value]):
-        force_onset_time = stim_time + (mrspt / 1000.0)
+        f_onset_mrspt = stim_time + (mrspt / 1000.0)
         fig.add_trace(go.Scatter(
-            x=[force_onset_time, force_onset_time],
-            y=[0, threshold_value],
-            mode='lines',
-            line=dict(color='green', dash='dash', width=1),
-            name='Force Onset (MRsT)',
-            showlegend=False
+            x=[f_onset_mrspt, f_onset_mrspt], y=[0, threshold_value],
+            mode='lines', line=dict(color='green', dash='dash', width=1),
+            name='Response time', showlegend=False
         ), row=1, col=1)
 
-    # --- EMG onset/offset markers ---
-    emg_onset_time = trial_metrics.get('emg_onset_time')
-    emg_offset_time = trial_metrics.get('emg_offset_time')
-    lower_onset_threshold = trial_metrics.get('emg_onset_threshold')
-
+    # --- EMG Onset/Offset Markers (PMRT Validation) ---
     if include_emg:
+        emg_onset_time = trial_metrics.get('emg_onset_time')
+        emg_offset_time = trial_metrics.get('emg_offset_time')
+        
+        # Determine shared height for EMG markers based on current subplot range
+        emg_min = trial_segment_df[[emg_r_col, emg_l_col]].min().min()
+        emg_max = trial_segment_df[[emg_r_col, emg_l_col]].max().max()
+
         if run_pmrt and emg_onset_time is not None:
             fig.add_trace(go.Scatter(
-                x=[emg_onset_time, emg_onset_time],
-                y=[trial_segment_df[[emg_r_col, emg_l_col]].min().min(), trial_segment_df[[emg_r_col, emg_l_col]].max().max()],
-                mode='lines',
-                line=dict(color='purple', dash='dash', width=1),
-                name='EMG Onset (PMRT)',
-                showlegend=False
+                x=[emg_onset_time, emg_onset_time], y=[emg_min, emg_max],
+                mode='lines', line=dict(color='purple', dash='dash', width=1.5),
+                name='EMG Onset', showlegend=False
             ), row=2, col=1)
 
         if run_emg_rms and emg_onset_time is not None and emg_offset_time is not None:
+            # Adding offset boundary for RMS window
             fig.add_trace(go.Scatter(
-                x=[emg_onset_time, emg_onset_time],
-                y=[trial_segment_df[[emg_r_col, emg_l_col]].min().min(), trial_segment_df[[emg_r_col, emg_l_col]].max().max()],
-                mode='lines',
-                line=dict(color='purple', dash='dash', width=1),
-                name='EMG Onset',
-                showlegend=False
-            ), row=2, col=1)
-            fig.add_trace(go.Scatter(
-                x=[emg_offset_time, emg_offset_time],
-                y=[trial_segment_df[[emg_r_col, emg_l_col]].min().min(), trial_segment_df[[emg_r_col, emg_l_col]].max().max()],
-                mode='lines',
-                line=dict(color='purple', dash='dash', width=1),
-                name='EMG Offset',
-                showlegend=False
+                x=[emg_offset_time, emg_offset_time], y=[emg_min, emg_max],
+                mode='lines', line=dict(color='purple', dash='dot', width=1.5),
+                name='EMG Offset', showlegend=False
             ), row=2, col=1)
 
+    # --- Final Layout & Annotations ---
     annotations = []
     if stim_time is not None:
+        # Arrow indicating the moment of Stimulus (T=0 for PMRT, MRT, etc.)
         annotations.append(
-            dict(
-                x=stim_time, y=0, xref="x", yref="y", text="",
+            dict(x=stim_time, y=0, xref="x", yref="y", text="",
                 showarrow=True, arrowhead=2, arrowsize=1.5, arrowwidth=1.5,
-                arrowcolor="black", ax=0, ay=-40
-            )
+                arrowcolor="black", ax=0, ay=-40)
         )
 
     fig.update_layout(
         title=selected_trial,
         margin=dict(t=30, b=0, l=0, r=0),
-        legend=dict(
-            yanchor="top", y=0.98, xanchor="right", x=0.98,
-            bgcolor="rgba(255, 255, 255, 0.75)"
-        ),
+        legend=dict(yanchor="top", y=0.98, xanchor="right", x=0.98, bgcolor="rgba(255, 255, 255, 0.75)"),
         annotations=annotations
     )
     
     return fig
 
 
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return Path(os.path.join(base_path, relative_path))
+
+
 # ==============================================================================
 # --- APP LAYOUT (UI) ---
 # ==============================================================================
+# Tab 1 = Data ingestion (file uploads, channel mapping, reference values)
+# Tab 2 = Analysis options (checkboxes, parameters)
+# Tab 3 = Trial viewer (trial selection, plotting, metrics display)
 app.layout = dbc.Container([
     html.H1("CogMo toolkit", className="my-3"),
     dbc.Tabs([
-        # First Tab: Upload Data
+        # Tab 1 : Data Upload Tab
+        # ---------------------------------------------------
+        # Hanndles file ingestion for both time-series signal and experimental condition order.
+        # Also captures participant-sepcific reference values (MVC, RFD) for normalization.
         dbc.Tab(
             label="Upload Data",
             children=[
                 html.Div([
                     dbc.Row(className="g-2", children=[
+                        # Signal data upload: Accepts raw formats (.csv, .txt. .tsv)
                         dbc.Col(
                             html.Div([
                                 html.H4("Upload your data file"),
@@ -275,7 +313,7 @@ app.layout = dbc.Container([
                                     children=html.Div([
                                         'Your raw data here (.csv, .tsv, .txt, .xlsx)'
                                     ]),
-                                    style={
+                                    style={ # Style toggled by callback on success/fail
                                         'height': '60px',
                                         'lineHeight': '60px',
                                         'borderWidth': '1px',
@@ -295,6 +333,7 @@ app.layout = dbc.Container([
                             ]),
                             width=6,
                         ),
+                        # Condition order upload: Map trials to experimental blocks
                         dbc.Col(
                             html.Div([
                                 html.H4(html.Br()),
@@ -325,10 +364,10 @@ app.layout = dbc.Container([
                         ),
                     ]),
                     
-                    # --- Channel Mapping Section ---
+                    # Mapping containiner is populated dynamically once headers are parsed
                     html.Div(id='channel-mapping-container', className="mt-2"),
                     
-                    # --- Baseline Reference values ---
+                    # Static reference inputs for normalization across trials
                     html.H4("Baseline Reference values", className="mt-3"),
                     dbc.Row([
                         dbc.Col(
@@ -365,9 +404,10 @@ app.layout = dbc.Container([
                 ], className="p-3")
             ]
         ),
-        
-
-        # --- Second tab: Analyses Option Tab ---
+        # Tab 2 : Analyses options & signal processing settings
+        # ---------------------------------------------------
+        # Hthis tab defines the global parameters for the session
+        # Allows the user to toggle specific force/EMG metrics and fine-tune detection settings.
         dbc.Tab(
             label="Analyses Option",
             children=[
@@ -430,6 +470,34 @@ app.layout = dbc.Container([
                     ]),
                     
                     html.Hr(className="my-4"),
+
+                    # --- Signal Processing Settings ---
+                    html.H4("Force Signal Processing"),
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label("Apply Low-Pass Filter"),
+                            dbc.Checklist(
+                                options=[{"label": "Enable Zero-Phase Butterworth", "value": 1}],
+                                value=[],
+                                id="force-filter-check",
+                                switch=True,
+                            ),
+                            dbc.Tooltip("Filters high-frequency noise without shifting the signal in time (non-causal).", target="force-filter-check"),
+                        ], width=6, md=4),
+                        dbc.Col([
+                            dbc.Label("Cutoff Frequency (Hz)"),
+                            dbc.Input(
+                                id="force-cutoff-input", 
+                                type="number", 
+                                value=50, 
+                                step=1,
+                                disabled=True # Greayed out by default
+                            ),
+                            dbc.Tooltip("Low pass frequency threshold", target="force-cutoff-input"),
+                        ], width=6, md=2),
+                    ]),
+
+                    html.Hr(className="my-4"),
                     
                     # --- EMG Detection Settings ---
                     html.H4("EMG Burst Detection Settings"),
@@ -444,7 +512,7 @@ app.layout = dbc.Container([
                         ], width=6, md=3),
                         dbc.Col([
                             dbc.Label("Offset SD (h-off)"),
-                            dbc.Input(id="emg-h-offset-input", type="number", value=25.0, step=1),
+                            dbc.Input(id="emg-h-offset-input", type="number", value=30.0, step=1),
                             dbc.Tooltip(
                                 "Multiplier for offset threshold (mean + σ from local quietest noise). Higher values prevent offset 'bleeding' into post-contraction noise.",
                                 target="emg-h-offset-input",
@@ -474,73 +542,84 @@ app.layout = dbc.Container([
             ]
         ),
 
-        # Third Tab: Trial Viewer
+         # Tab 3 : Trial viewer
+        # ---------------------------------------------------
+        # Validation core. Uses a compact layout to maximize graph area. Allow for frame-by-frame verification
+        # of trial segmentations and analysis results.
         dbc.Tab(
             label="Trial Viewer",
             children=[
                 html.Div([
-                    # --- Section 1: Trial Controls ---
-                    html.H4("Trial Controls", className="mt-3"),
-                    dbc.Row([
-                        dbc.Col([
-                            dbc.Label("Select Block:"),
-                            dcc.Dropdown(id='block-selector-dropdown')
-                        ], width=6, lg=4), # Takes less space on large screens
-                        dbc.Col([
-                            dbc.Label("Select Trial:"),
+                    dcc.Download(id="download-trial-csv"),
+                    # Compact navigation: Single-row for block and trial selectors
+                    html.Div([
+                        html.Div([
+                            html.H4("Trial Controls", className="fw-bold mb-0 me-4", style={'white-space': 'nowrap'}),
+                            html.Span("Block:", className="me-2 small fw-bold"),
+                            html.Div(
+                                dcc.Dropdown(
+                                    id='block-selector-dropdown', 
+                                    style={'width': '140px'},
+                                    placeholder="Select..."
+                                ), 
+                                className="me-5"
+                            ),
+                            html.Span("Trial:", className="me-2 small fw-bold"),
                             dbc.InputGroup([
                                 dbc.Button(
-                                    html.I(className="fas fa-chevron-left"),
-                                    id='prev-trial-button', n_clicks=0, color="secondary", outline=True
+                                    html.I(className="fas fa-chevron-left"), 
+                                    id='prev-trial-button', 
+                                    size="sm", 
+                                    color="secondary", 
+                                    outline=True
                                 ),
-                                dcc.Dropdown(id='trial-selector-dropdown', style={'flex': '1'}),
+                                dcc.Dropdown(
+                                    id='trial-selector-dropdown', 
+                                    style={'width': '120px'},
+                                    className="flex-grow-1"
+                                ),
                                 dbc.Button(
-                                    html.I(className="fas fa-chevron-right"),
-                                    id='next-trial-button', n_clicks=0, color="secondary", outline=True
+                                    html.I(className="fas fa-chevron-right"), 
+                                    id='next-trial-button', 
+                                    size="sm", 
+                                    color="secondary", 
+                                    outline=True
                                 )
-                            ])
-                        ], width=6, lg=4)
+                            ], size="sm", style={'width': '220px'})
+                        ], className="d-flex align-items-center mb-3 p-2 border-bottom"),
                     ]),
-
-                    html.Hr(),
-
-                    # --- Section 2: View Parameters ---
-                    html.H4("View Parameters", className="mt-3"),
-                    dbc.Row([
-                         dbc.Col([
-                            dbc.Label("Pre-Stimulus Window (s):"),
-                            dbc.Input(id='pre-stim-window-input', type='number', value=1, step=0.05),
-                         ], width=6, lg=4),
-                         dbc.Col([
-                            dbc.Label("Post-Stimulus Window (s):"),
-                            dbc.Input(id='post-stim-window-input', type='number', value=2, step=0.05),
-                         ], width=6, lg=4)
-                    ]),
-                    
-                    html.Hr(),
-
-                    # --- Section 3: Trial Plot (now full-width) ---
+                    # View parameters: adjust the x-axis window
+                    html.Div([
+                        html.H4("View Parameters", className="fw-bold mb-0 me-3", style={'white-space': 'nowrap'}),
+                        html.Span("Pre-Stim (s):", className="me-2 small fw-bold"),
+                        dbc.Input(id='pre-stim-window-input', type='number', value=1, step=0.05, size="sm", style={'width': '80px'}, className="me-4"),
+                        html.Span("Post-Stim (s):", className="me-2 small fw-bold"),
+                        dbc.Input(id='post-stim-window-input', type='number', value=2, step=0.05, size="sm", style={'width': '80px'})
+                    ], className="d-flex align-items-center mb-3"),
+                    html.Hr(className="my-2"),
+                    # Trial viewer graph
                     dbc.Row([
                         dbc.Col([
-                            dcc.Graph(id='trial-graph', style={'height': '40vh'})
+                            dcc.Graph(id='trial-graph', style={'height': '50vh'})
                         ], width=12) 
                     ]),
-
-                    html.Hr(),
-
-                    # --- Section 4: Trial Metrics (now full-width) ---
-                    dbc.Row([
-                        dbc.Col([
-                            html.H4("Trial Metrics"),
-                            html.Div(id='trial-metrics-display'), 
-                        ], width=12)
-                    ])
-
+                    # Results panel: displays calculated metrics for the current trial
+                    html.Div([
+                        html.Div([
+                            html.H4("Trial Metrics", className="fw-bold mb-0"),
+                            dbc.Button([
+                                html.I(className="fas fa-download me-2"),
+                                "Download Trial"
+                            ], id="btn-download-trial", color="primary", outline=True, size="sm")
+                        ], className="d-flex justify-content-between align-items-center mb-2"),
+                        
+                        html.Div(id='trial-metrics-display'), 
+                    ], className="mt-4")
                 ], className="p-3")
             ]
         ),
     ])
-], fluid=False, style={'width': '1000px', 'overflow-x': 'hidden'})
+ ])
 
 
 # Add dcc.Store components to save the identified comment types and reference values
@@ -957,6 +1036,17 @@ def toggle_rfd_input_disabled(is_checked):
     """
     return not is_checked
 
+# Callback to enable/disable the Force Cutoff Frequency input
+# --------------------------------------------------------------
+@app.callback(
+    Output("force-cutoff-input", "disabled"),
+    Input("force-filter-check", "value")
+)
+def toggle_cutoff_sensitivity(filter_value):
+    # If the list is empty ([]) or None, return True to keep it disabled
+    # If it has [1], return False to enable it
+    return not bool(filter_value)
+
 
 # Callback for block navigation
 # ------------------------------
@@ -1094,6 +1184,9 @@ def handle_trial_navigation(
     # --- Triggers ---
     Input('block-selector-dropdown', 'value'),
     Input('trial-selector-dropdown', 'value'),
+       # Force signal processing ---
+    Input('force-filter-check', 'value'),
+    Input('force-cutoff-input', 'value'),
     # --- Data Sources ---
     State('condition-data-store', 'data'),
     State('signal-data-store', 'data'),
@@ -1126,11 +1219,11 @@ def handle_trial_navigation(
     State('analysis-rms-checkbox', 'value'),
     # --- EMG Settings ---
     State('emg-min-duration-input', 'value'),
-    State('emg-h-onset-input', 'value'), 
-    State('emg-h-offset-input', 'value')
+    State('emg-h-onset-input', 'value'),
+    State('emg-h-offset-input', 'value'),
 )
 def update_trial_data(
-    selected_block, selected_trial, condition_data_dict, session_id,
+    selected_block, selected_trial, force_filter_val, force_cutoff_hz, condition_data_dict, session_id,
     channel_map, trial_lookup_dict, pre_window, post_window,
     mvc_left, mvc_right,
     min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
@@ -1161,7 +1254,7 @@ def update_trial_data(
         raise PreventUpdate
     global_index_to_use = matching_trials['global_index'].iloc[0]
 
-    # Call the contractor function to get the base metrics (threshold, stim_time, etc.)
+    # Call function to get the base metrics (threshold, stim_time, etc.)
     # and the DataFrame for the user's visualization window.
     trial_view_df, base_metrics = get_trial_data_and_metrics(
         full_df=full_df,
@@ -1174,12 +1267,29 @@ def update_trial_data(
         pre_window=pre_window,
         post_window=post_window
     )
+    # Determine filterering state
+    is_filter_enabled = 1 in (force_filter_val or [])
+    # Process both full dataframe and trial view dataframe
+    if is_filter_enabled and force_cutoff_hz:
+        # Determine which hand's force to filter based on available channels
+        for hand in ['right', 'left']:
+            force_col = channel_map.get(f'force_{hand}')
+            if force_col and force_col in full_df.columns:
+                # Apply zero-phase Butterworth filter to the full dataset
+                full_df[force_col] = fa.apply_force_filter(
+                    full_df[force_col].values,
+                    cutoff = force_cutoff_hz
+                )
+                # Also update the view dataframe for consistent plotting
+                trial_view_df[force_col] = fa.apply_force_filter(
+                    trial_view_df[force_col].values,
+                    cutoff= force_cutoff_hz
+                )
 
-    #  Robust Analysis Pipeline
+    #  Analysis Pipeline
     # --------------------------
     
-    # Intelligently find the main contraction event, regardless of hand.
-    # This is the "master" function that defines the analysis context.
+    # Find the main contraction event, regardless of hand.
     peak_info = fa.find_main_contraction_peak(
         full_df=full_df,
         stim_time=base_metrics['stim_time'],
@@ -1195,25 +1305,25 @@ def update_trial_data(
     base_metrics['trial_status'] = peak_info['status']
     base_metrics['response_hand'] = peak_info['response_hand']
     
-    # Run all subsequent analyses *only if* a valid peak was found.
+    # Run all subsequent analyses only if a valid peak was found.
     if peak_info['analysis_df'] is not None and base_metrics['response_hand'] is not None:
         
         # Use the dynamically centered analysis window from the peak finder
-        analysis_df = peak_info['analysis_df']
+        analysis_df = peak_info['analysis_df'].copy()
         
         # Store the found peak info
         base_metrics['peak_time'] = peak_info['peak_time']
         base_metrics['peak_value'] = peak_info['peak_value']
         base_metrics['time_to_peak'] = peak_info['peak_time'] - base_metrics['stim_time']
 
-        # Calculate Foundational Metrics
+        # Calculate foundational metrics
         if (run_peak_force or run_motor_reaction_time or run_motor_response_time or 
             run_force_time_integral or run_mean_force or run_rfd):
             
             mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
             peak_time = base_metrics['stim_time'] + base_metrics['time_to_peak']
             
-            # Find Onset Time (needed for MRT, FTI, Mean Force, RFD)
+            # Find onset time (needed for MRT, FTI, Mean Force, RFD)
             if run_motor_reaction_time or run_force_time_integral or run_mean_force or run_rfd:
                 onset_time = fa.find_contraction_onset(
                     signal_df=analysis_df,
@@ -1223,7 +1333,7 @@ def update_trial_data(
                 )
                 base_metrics['force_onset_time'] = onset_time
 
-            # Find Offset Time & Baseline (needed for FTI, Mean Force, RFD)
+            # Find offset time & baseline (needed for FTI, Mean Force, RFD)
             if run_force_time_integral or run_mean_force or run_rfd:
                 offset_time = fa.find_contraction_offset(
                     signal_df=analysis_df,
@@ -1240,7 +1350,7 @@ def update_trial_data(
                 )
                 base_metrics['baseline_force'] = baseline
 
-        # Calculate Final "Leaf" Metrics
+        # Calculate final leaf metrics
         
         if run_peak_force:
             mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
@@ -1317,13 +1427,12 @@ def update_trial_data(
                     if 'peak_rfd' in base_metrics and base_metrics['peak_rfd'] is not None:
                         base_metrics['peak_rfd_pct'] = (base_metrics['peak_rfd'] / rfd_baseline) * 100
 
-        # -----------------------------------------------------------------
-        # EMG Analyses
-        # -----------------------------------------------------------------
+        # EMG Analysis Section
+        # ---------------------
         
         if (channel_map.get('emg_left') and channel_map.get('emg_right')) and (run_pmrt or run_emg_rms):
             try:
-                # 1. Calculate Local Dynamic Thresholds for BOTH onset and offset
+                # Calculate local dynamic thresholds for BOTH onset and offset
                 onset_threshold = ea.calculate_dynamic_threshold(
                     full_df=analysis_df,
                     channel_map=channel_map,
@@ -1337,10 +1446,11 @@ def update_trial_data(
                     channel_map=channel_map,
                     response_hand=base_metrics['response_hand'],
                     duration_sec=0.1,  
-                    h_multiplier=emg_h_offset if emg_h_offset is not None else 25.0 # From UI
+                    h_multiplier=emg_h_offset if emg_h_offset is not None else 30.0 # From UI
+                    # Default is higher to avoid premature offsets, as EMG activity often trails
                 )
 
-                # 2. Define the search window based on force metrics
+                # Define the search window based on force metrics
                 if base_metrics['force_onset_time'] is None or base_metrics['force_offset_time'] is None:
                     viz_df = analysis_df
                 else:                                 
@@ -1352,7 +1462,7 @@ def update_trial_data(
                         (analysis_df[time_col] <= viz_end_time)
                     ].copy()
 
-                # 3. Detect EMG boundaries using DUAL thresholds
+                # Detect EMG boundaries using dual thresholds
                 onset_time, offset_time, active_threshold = ea.find_emg_boundaries(
                     signal_df=viz_df,
                     channel_map=channel_map,
@@ -1371,7 +1481,7 @@ def update_trial_data(
                     # Store onset threshold for the graph visualization
                     base_metrics['emg_threshold'] = onset_threshold 
 
-                    # 4. Compute PMRT (Stimulus -> EMG Onset)
+                    # 4. Compute pre-motor RT (Stimulus -> EMG Onset)
                     if run_pmrt:
                         base_metrics['premotor_reaction_time'] = (onset_time - base_metrics['stim_time']) * 1000
 
@@ -1397,7 +1507,7 @@ def update_trial_data(
                 base_metrics['premotor_reaction_time'] = None
                 base_metrics['emg_rms'] = None
 
-    # Final Trial Status Interpretation
+    # Final trial status interpretation
     # ----------------------------------
     LATE_RESPONSE_THRESHOLD_S = 1.0
     if base_metrics['trial_status'] == 'valid':
@@ -1556,33 +1666,161 @@ def update_graph_view(
     return fig
 
 
+# Callback for trial data download
+# ---------------------------------------
+@app.callback(
+    Output("download-trial-csv", "data"),
+    Input("btn-download-trial", "n_clicks"),
+    # --- Identifiers ---
+    State('signal-data-store', 'data'),      # session_id
+    State('trial-lookup-store', 'data'),     # list of all trials
+    State('condition-data-store', 'data'),   
+    State('channel-map-store', 'data'),
+    # --- Analysis Settings (to match the UI) ---
+    State('mvc-left-store', 'data'),
+    State('mvc-right-store', 'data'),
+    State('pre-stim-window-input', 'value'),
+    State('post-stim-window-input', 'value'),
+    State('min-valid-rt-input', 'value'),
+    State('min-prominence-input', 'value'),
+    State('pre-stim-search-input', 'value'),
+    State('post-stim-search-input', 'value'),
+    # --- Analysis Toggles ---
+    State('analysis-peak-force-checkbox', 'value'),
+    State('analysis-mrspt-checkbox', 'value'),
+    State('analysis-mrt-checkbox', 'value'),
+    State('analysis-fti-checkbox', 'value'),
+    State('analysis-mean-force-checkbox', 'value'),
+    State('analysis-rfd-checkbox', 'value'),
+    State('analysis-rfd-window-input', 'value'),
+    # --- EMG Settings ---
+    State('analysis-pmrt-checkbox', 'value'),
+    State('analysis-rms-checkbox', 'value'),
+    State('emg-min-duration-input', 'value'),
+    State('emg-h-onset-input', 'value'), 
+    State('emg-h-offset-input', 'value'),
+    prevent_initial_call=True,
+)
+def handle_bulk_metrics_download(
+    n_clicks, session_id, lookup_dict, condition_dict, channel_map,
+    mvc_left, mvc_right, pre_window, post_window, 
+    min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
+    run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral,
+    run_mean_force, run_rfd, rfd_window_ms,
+    run_pmrt, run_emg_rms, emg_min_duration_ms, emg_h_onset, emg_h_offset
+):
+    if not n_clicks:
+        raise PreventUpdate
+
+    # Setup data
+    app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
+    filepath = app_temp_dir / f"{session_id}.feather"
+    full_df = pd.read_feather(filepath)
+    trial_lookup = pd.DataFrame(lookup_dict)
+    condition_data = pd.DataFrame(condition_dict)
+    
+    all_final_metrics = []
+
+    # Start the loop
+    for _, trial_row in trial_lookup.iterrows():
+        global_idx = trial_row['global_index']
+        
+        # Base data & thresholds
+        trial_view_df, base_metrics = get_trial_data_and_metrics(
+            full_df=full_df, trial_lookup=trial_lookup, condition_data=condition_data,
+            trial_index=global_idx, channel_map=channel_map, mvc_left=mvc_left, mvc_right=mvc_right,
+            pre_window=pre_window, post_window=post_window
+        )
+
+        # Peak finder
+        peak_info = fa.find_main_contraction_peak(
+            full_df=full_df, stim_time=base_metrics['stim_time'], channel_map=channel_map,
+            threshold=base_metrics['threshold'], min_valid_rt_s=min_valid_rt_s,
+            min_prominence_n=min_prominence_n, search_window_pre_s=pre_stim_search_s,
+            search_window_post_s=post_stim_search_s
+        )
+        
+        base_metrics['trial_status'] = peak_info['status']
+        base_metrics['response_hand'] = peak_info['response_hand']
+
+        # Metric pipeline
+        if peak_info['analysis_df'] is not None and base_metrics['response_hand'] is not None:
+            analysis_df = peak_info['analysis_df']
+            peak_time = peak_info['peak_time']
+            
+            # Peak & Timing
+            # ---------------
+            base_metrics.update({
+                'peak_time': peak_info['peak_time'],
+                'peak_value': peak_info['peak_value'],
+                'time_to_peak': peak_info['peak_time'] - base_metrics['stim_time']
+            })
+
+            # Onset/Offset for Force
+            # ------------------------
+            onset_time = fa.find_contraction_onset(analysis_df, base_metrics['stim_time'], peak_time, base_metrics['response_hand'])
+            offset_time = fa.find_contraction_offset(analysis_df, peak_time, peak_info['peak_value'], base_metrics['response_hand'])
+            baseline = fa.find_baseline_force(analysis_df, peak_time, base_metrics['response_hand'])
+            
+            base_metrics['force_onset_time'] = onset_time
+            base_metrics['force_offset_time'] = offset_time
+
+            # Calculate Individual Metrics
+            # ------------------------------
+            if run_peak_force:
+                mvc_val = mvc_right if base_metrics['response_hand'] == 'right' else mvc_left
+                base_metrics.update(fa.peak_force_metrics(base_metrics['peak_value'], peak_time, base_metrics['stim_time'], base_metrics['threshold'], mvc_val))
+            
+            if run_motor_reaction_time:
+                base_metrics['motor_reaction_time'] = fa.motor_reaction_time(base_metrics['stim_time'], onset_time)
+            
+            if run_rfd:
+                base_metrics.update(fa.calculate_rfd(analysis_df, onset_time, peak_time, baseline, base_metrics['response_hand'], rfd_window_ms))
+
+            #  EMG analyses
+            # ---------------- 
+            if (channel_map.get('emg_left') and channel_map.get('emg_right')) and (run_pmrt or run_emg_rms):
+                try:
+                    # Dual Threshold Detection
+                    on_thresh = ea.calculate_dynamic_threshold(analysis_df, channel_map, base_metrics['response_hand'], 0.1, emg_h_onset)
+                    off_thresh = ea.calculate_dynamic_threshold(analysis_df, channel_map, base_metrics['response_hand'], 0.1, emg_h_offset)
+                    
+                    emg_on, emg_off, _ = ea.find_emg_boundaries(analysis_df, channel_map, base_metrics['response_hand'], base_metrics['stim_time'], onset_time, offset_time, emg_min_duration_ms, on_thresh, off_thresh)
+                    
+                    if emg_on:
+                        base_metrics['premotor_reaction_time'] = (emg_on - base_metrics['stim_time']) * 1000
+                        if run_emg_rms:
+                            base_metrics['emg_rms'] = ea.calculate_emg_rms(analysis_df, channel_map, base_metrics['response_hand'], emg_on, emg_off)
+                except: pass
+
+        all_final_metrics.append(base_metrics)
+
+    # Save to CSV
+    # --------------
+    final_df = pd.DataFrame(all_final_metrics)
+    
+    print(f"✅ Bulk Export Complete: {len(final_df)} trials analyzed.")
+    
+    return dcc.send_data_frame(
+        final_df.to_csv, 
+        f"CogMo_Bulk_Export_{session_id}.csv", 
+        index=False
+    )
+
 # ==============================================================================
 # --- MAIN APP EXECUTION ---
 # ==============================================================================
-def run_app_server():
-    # Note: debug=False is important for packaged apps
-    app.run(debug=False) 
-
-def on_closing():
-    # Clean up temporary files and directories when the app is closed
+def clean_temp_dir():
     app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
     if app_temp_dir.exists():
         shutil.rmtree(app_temp_dir, ignore_errors=True)
+    app_temp_dir.mkdir(parents=True, exist_ok=True)
+
+def open_browser():
+    webbrowser.open_new("http://127.0.0.1:8050")
 
 if __name__ == '__main__':
-    # Run the Dash server in a separate thread
-    server_thread = threading.Thread(target=run_app_server)
-    server_thread.daemon = True
-    server_thread.start()
-
-    # Create and start the pywebview window
-    window = webview.create_window(
-        'CogMo Toolkit', 
-        'http://127.0.0.1:8050/',
-        width=1000,
-        height=750
-    )
-
-    window.events.closing += on_closing
-
-    webview.start()
+    clean_temp_dir()
+    # Timer ensures the server is actually up before the browser tries to hit it
+    Timer(1.5, open_browser).start()
+    app.run(debug=False, host='127.0.0.1', port=8050)
