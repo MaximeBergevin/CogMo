@@ -29,6 +29,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
+          cache-dependency-path: |
+            requirements.in
+            requirements_mac.txt
 
       - name: Install Build Tools
         run: |
