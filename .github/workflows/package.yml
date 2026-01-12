@@ -1,0 +1,59 @@
+name: Package and Release CogMo Toolkit
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  package:
+    name: Build on ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            req_file: requirements_mac.txt
+            python-version: '3.12'
+          - os: windows-latest
+            req_file: requirements_windows.txt
+            python-version: '3.13'
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install Build Tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-tools pyinstaller
+
+      - name: Generate Windows Requirements
+        if: matrix.os == 'windows-latest'
+        run: |
+          pip-compile requirements.in -o requirements_windows.txt
+          pip install -r requirements_windows.txt
+
+      - name: Install Mac Requirements
+        if: matrix.os == 'macos-latest'
+        run: |
+          # Use your local frozen file for Mac
+          pip install -r requirements_mac.txt
+
+      - name: PyInstaller Build
+        run: |
+          # Uses your .spec file with the resource_path logic
+          python -m PyInstaller CogMoToolkit.spec --clean
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CogMoToolkit-${{ matrix.os }}
+          path: dist/ # Grabs the executable or folder

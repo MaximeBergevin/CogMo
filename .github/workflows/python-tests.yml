@@ -1,0 +1,45 @@
+name: Run Python Unit Tests
+
+on:
+  push:
+    branches:
+      - dev
+      - feat/**
+      - fix/**
+      - refactor/**
+  pull_request:
+    branches:
+      - main
+      - dev
+
+jobs:
+  run-unit-tests:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python with caching
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: requirements.in
+          
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+          
+      - name: Install and Compile Dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel pip-tools
+          pip-compile requirements.in -o requirements_linux.txt
+          pip install -r requirements_linux.txt
+          pip install -e .
+      
+      # TODO: Translate unit tests from R to python
+      - name: Run Unit Tests
+        run: |
+          python -m pytest
