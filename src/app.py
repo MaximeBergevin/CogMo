@@ -719,6 +719,7 @@ def upload_signal_data_callback(signal_contents, signal_filename):
             print(f"Comment's count: {comment_summary}")
             print(f"Block comments: {block_comments}")
             print(f"Stimulus comments: {stimulus_comments}")
+            print(f"Total rows tagged as True for block start: {df['is_block_start'].sum()}")
             print(message)
 
             return session_id, block_comments, stimulus_comments, message,  SUCCESS_UPLOAD_STYLE
