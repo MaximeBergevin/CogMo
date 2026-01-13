@@ -394,24 +394,25 @@ def find_main_contraction_peak(
     full_df: pd.DataFrame,
     stim_time: float,
     channel_map: Dict[str, str],
-    threshold: float,
+    threshold: float,     
     min_valid_rt_s: float,
     min_prominence_n: float,
     search_window_pre_s: float,
-    search_window_post_s: float
+    search_window_post_s: float,
+    noise_shield: float = 0.2  #
 ) -> Dict[str, Any]:
     """
-    Determines the responding hand and identifies the primary contraction peak.
-    
-    Uses SciPy's peak detection on both force channels. Selection priority:
-    1. The earliest valid peak following the minimum reaction time (RT) boundary.
-    2. If no valid peak exists, the latest 'false start' peak before the RT boundary.
+    Identifies the primary contraction peak using a double-threshold approach.
+    Prioritizes the earliest crossing of the main 'threshold', falling back 
+    to the highest prominence peak that stays above the 'noise_shield'.
     """
+    import pandas as pd
+    from scipy import signal
+    
     force_r_col = channel_map.get('force_right')
     force_l_col = channel_map.get('force_left')
 
-    # 1. Broad Search for Candidate Peaks on Both Hands
-    # --------------------------------------------------
+    # 1. Define Search Window
     search_start = stim_time - search_window_pre_s
     search_end = stim_time + search_window_post_s
     search_df = full_df[(full_df['time'] >= search_start) & (full_df['time'] <= search_end)].copy()
@@ -419,39 +420,58 @@ def find_main_contraction_peak(
     if search_df.empty:
         return {'status': 'omission', 'peak_time': None, 'peak_value': None, 'response_hand': None, 'analysis_df': None}
 
-    # Find all meaningful peaks on the right hand
-    r_peak_indices, _ = signal.find_peaks(search_df[force_r_col], height=threshold, prominence=min_prominence_n)
-    right_peaks = search_df.iloc[r_peak_indices].copy()
-    right_peaks['hand'] = 'right'
-    
-    # Find all meaningful peaks on the left hand
-    l_peak_indices, _ = signal.find_peaks(search_df[force_l_col], height=threshold, prominence=min_prominence_n)
-    left_peaks = search_df.iloc[l_peak_indices].copy()
-    left_peaks['hand'] = 'left'
+    # 2. Extract Peaks Safely (Decimal prominence allowed)
+    # -----------------------------------------------------------------
+    def get_peaks(df, col, hand_name):
+        idx, props = signal.find_peaks(df[col], prominence=float(min_prominence_n))
+        peaks = df.iloc[idx].copy()
+        if not peaks.empty:
+            peaks['prominence'] = props['prominences']
+            peaks['hand'] = hand_name
+            peaks['abs_force'] = peaks[col]
+            return peaks
+        return pd.DataFrame(columns=list(df.columns) + ['prominence', 'hand', 'abs_force'])
 
-    # Combine all found peaks into a single DataFrame
+    right_peaks = get_peaks(search_df, force_r_col, 'right')
+    left_peaks = get_peaks(search_df, force_l_col, 'left')
+    
     all_peaks_df = pd.concat([right_peaks, left_peaks]).sort_values(by='time')
 
     if all_peaks_df.empty:
         return {'status': 'omission', 'peak_time': None, 'peak_value': None, 'response_hand': None, 'analysis_df': None}
 
-    # 2. Apply Prioritized Selection Rule
-    # ------------------------------------
+    # 3. Competitive Selection with Double Threshold
+    # ----------------------------------------------------------
     valid_rt_boundary = stim_time + min_valid_rt_s
-    
-    valid_response_peaks = all_peaks_df[all_peaks_df['time'] >= valid_rt_boundary]
-    false_start_peaks = all_peaks_df[all_peaks_df['time'] < valid_rt_boundary]
+    valid_candidates = all_peaks_df[all_peaks_df['time'] >= valid_rt_boundary].copy()
+    false_starts = all_peaks_df[all_peaks_df['time'] < valid_rt_boundary]
     
     target_peak = None
     status = 'omission'
 
-    if not valid_response_peaks.empty:
-        # The true response is the EARLIEST valid peak after the RT window
-        target_peak = valid_response_peaks.iloc[0]
-        status = 'valid'
-    elif not false_start_peaks.empty:
-        # The false start is the LAST peak that occurred before the RT window
-        target_peak = false_start_peaks.iloc[-1]
+    if not valid_candidates.empty:
+        # THRESHOLD 1: The Main Target (e.g., 3.0 N)
+        above_target = valid_candidates[valid_candidates['abs_force'] >= threshold]
+
+        if not above_target.empty:
+            # RULE 1: Earliest peak to hit the target
+            target_peak = above_target.sort_values(by='time').iloc[0]
+            status = 'valid'
+        else:
+            # THRESHOLD 2: The Noise Shield (e.g., 0.2 N)
+            # This ignores the 'silent' hand noise seen in image_8efb3e.jpg
+            real_attempts = valid_candidates[valid_candidates['abs_force'] > noise_shield]
+            
+            if not real_attempts.empty:
+                # RULE 2: Fallback to highest prominence among real attempts
+                target_peak = real_attempts.sort_values(by='prominence', ascending=False).iloc[0]
+                status = 'low_force_candidate'
+            else:
+                status = 'omission'
+
+    elif not false_starts.empty:
+        # RULE 3: Fallback to latest false start for visual context
+        target_peak = false_starts.sort_values(by='time').iloc[-1]
         status = 'false_start'
     
     if target_peak is None:
@@ -459,10 +479,9 @@ def find_main_contraction_peak(
     
     peak_time = target_peak['time']
     response_hand = target_peak['hand']
-    peak_value = target_peak[channel_map.get(f"force_{response_hand}")] # Get value from the correct column
+    peak_value = target_peak['abs_force']
 
-    # 3. Create the Dynamic Analysis Window
-    # --------------------------------------
+    # 4. Create Analysis Window
     analysis_start = peak_time - 1.25
     analysis_end = peak_time + 1.25
     analysis_df = full_df[(full_df['time'] >= analysis_start) & (full_df['time'] <= analysis_end)]
@@ -471,7 +490,7 @@ def find_main_contraction_peak(
         'status': status,
         'peak_time': peak_time,
         'peak_value': peak_value,
-        'response_hand': response_hand, # Return the determined hand
+        'response_hand': response_hand,
         'analysis_df': analysis_df
     }
 

@@ -78,7 +78,7 @@ def load_signal(filepath: Path) -> tuple[pd.DataFrame, dict]:
             data_frame['is_trial_start'] = (data_frame['comment_base'] == trial_base_type)
             
             # 4. Generate numbering
-            data_frame['block_number'] = data_frame['is_block_start'].fillna(False).cumsum() + 1
+            data_frame['block_number'] = data_frame['is_block_start'].fillna(False).cumsum()
             # Grouping by block ensures trial numbers reset to 1 at each new block
             data_frame['trial_number'] = data_frame.groupby('block_number')['is_trial_start'].fillna(False).cumsum()
             

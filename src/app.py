@@ -171,7 +171,7 @@ def create_trial_figure(
             fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], name='EMG Left', showlegend=False, line=dict(width=0.5, color=COLOR_L)), row=2, col=1)
 
     # --- Subplot Axes Configuration ---
-    fig.update_yaxes(title_text="Force", range=[0, max_mvc], row=1, col=1)
+    fig.update_yaxes(title_text="Force", range=[-1, max_mvc], row=1, col=1)
     if include_emg:
         fig.update_yaxes(title_text="EMG", row=2, col=1)
 
@@ -454,17 +454,17 @@ app.layout = dbc.Container([
                         ], width=6, md=3),
                         dbc.Col([
                             dbc.Label("Min. Peak Prominence (N)"),
-                            dbc.Input(id="min-prominence-input", type="number", value=5, step=1),
+                            dbc.Input(id="min-prominence-input", type="number", value=0.5, step=0.01),
                             dbc.Tooltip("How much a peak must 'stick out' from the surrounding signal to be considered a new event.", target="min-prominence-input"),
                         ], width=6, md=3),
                         dbc.Col([
                             dbc.Label("Pre-Stimulus Search (s)"),
-                            dbc.Input(id="pre-stim-search-input", type="number", value=1.0, step=0.1),
+                            dbc.Input(id="pre-stim-search-input", type="number", value=0.5, step=0.1),
                             dbc.Tooltip("How far before the stimulus to look for peaks.", target="pre-stim-search-input"),
                         ], width=6, md=3),
                         dbc.Col([
                             dbc.Label("Post-Stimulus Search (s)"),
-                            dbc.Input(id="post-stim-search-input", type="number", value=2.0, step=0.1),
+                            dbc.Input(id="post-stim-search-input", type="number", value=1.5, step=0.1),
                              dbc.Tooltip("How far after the stimulus to look for peaks.", target="post-stim-search-input"),
                         ], width=6, md=3),
                     ]),
