@@ -171,7 +171,7 @@ def create_trial_figure(
             fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], name='EMG Left', showlegend=False, line=dict(width=0.5, color=COLOR_L)), row=2, col=1)
 
     # --- Subplot Axes Configuration ---
-    fig.update_yaxes(title_text="Force", range=[0, max_mvc], row=1, col=1)
+    fig.update_yaxes(title_text="Force", range=[-1, max_mvc], row=1, col=1)
     if include_emg:
         fig.update_yaxes(title_text="EMG", row=2, col=1)
 
@@ -454,17 +454,17 @@ app.layout = dbc.Container([
                         ], width=6, md=3),
                         dbc.Col([
                             dbc.Label("Min. Peak Prominence (N)"),
-                            dbc.Input(id="min-prominence-input", type="number", value=5, step=1),
+                            dbc.Input(id="min-prominence-input", type="number", value=0.5, step=0.01),
                             dbc.Tooltip("How much a peak must 'stick out' from the surrounding signal to be considered a new event.", target="min-prominence-input"),
                         ], width=6, md=3),
                         dbc.Col([
                             dbc.Label("Pre-Stimulus Search (s)"),
-                            dbc.Input(id="pre-stim-search-input", type="number", value=1.0, step=0.1),
+                            dbc.Input(id="pre-stim-search-input", type="number", value=0.5, step=0.1),
                             dbc.Tooltip("How far before the stimulus to look for peaks.", target="pre-stim-search-input"),
                         ], width=6, md=3),
                         dbc.Col([
                             dbc.Label("Post-Stimulus Search (s)"),
-                            dbc.Input(id="post-stim-search-input", type="number", value=2.0, step=0.1),
+                            dbc.Input(id="post-stim-search-input", type="number", value=1.5, step=0.1),
                              dbc.Tooltip("How far after the stimulus to look for peaks.", target="post-stim-search-input"),
                         ], width=6, md=3),
                     ]),
@@ -547,79 +547,89 @@ app.layout = dbc.Container([
         # Validation core. Uses a compact layout to maximize graph area. Allow for frame-by-frame verification
         # of trial segmentations and analysis results.
         dbc.Tab(
-            label="Trial Viewer",
-            children=[
+        label="Trial Viewer",
+        children=[
+            html.Div([
+                dcc.Download(id="download-trial-csv"),
+                dcc.Store(id='discarded-trials-store', data=[], storage_type='session'),
+                # Compact navigation: Single-row for block and trial selectors
                 html.Div([
-                    dcc.Download(id="download-trial-csv"),
-                    # Compact navigation: Single-row for block and trial selectors
                     html.Div([
-                        html.Div([
-                            html.H4("Trial Controls", className="fw-bold mb-0 me-4", style={'white-space': 'nowrap'}),
-                            html.Span("Block:", className="me-2 small fw-bold"),
-                            html.Div(
-                                dcc.Dropdown(
-                                    id='block-selector-dropdown', 
-                                    style={'width': '140px'},
-                                    placeholder="Select..."
-                                ), 
-                                className="me-5"
+                        html.H4("Trial Controls", className="fw-bold mb-0 me-4", style={'white-space': 'nowrap'}),
+                        html.Span("Block:", className="me-2 small fw-bold"),
+                        html.Div(
+                            dcc.Dropdown(
+                                id='block-selector-dropdown', 
+                                style={'width': '140px'},
+                                placeholder="Select..."
+                            ), 
+                            className="me-5"
+                        ),
+                        html.Span("Trial:", className="me-2 small fw-bold"),
+                        dbc.InputGroup([
+                            dbc.Button(
+                                html.I(className="fas fa-chevron-left"), 
+                                id='prev-trial-button', 
+                                size="sm", 
+                                color="secondary", 
+                                outline=True
                             ),
-                            html.Span("Trial:", className="me-2 small fw-bold"),
-                            dbc.InputGroup([
-                                dbc.Button(
-                                    html.I(className="fas fa-chevron-left"), 
-                                    id='prev-trial-button', 
-                                    size="sm", 
-                                    color="secondary", 
-                                    outline=True
-                                ),
-                                dcc.Dropdown(
-                                    id='trial-selector-dropdown', 
-                                    style={'width': '120px'},
-                                    className="flex-grow-1"
-                                ),
-                                dbc.Button(
-                                    html.I(className="fas fa-chevron-right"), 
-                                    id='next-trial-button', 
-                                    size="sm", 
-                                    color="secondary", 
-                                    outline=True
-                                )
-                            ], size="sm", style={'width': '220px'})
-                        ], className="d-flex align-items-center mb-3 p-2 border-bottom"),
-                    ]),
-                    # View parameters: adjust the x-axis window
+                            dcc.Dropdown(
+                                id='trial-selector-dropdown', 
+                                style={'width': '120px'},
+                                className="flex-grow-1"
+                            ),
+                            dbc.Button(
+                                html.I(className="fas fa-chevron-right"), 
+                                id='next-trial-button', 
+                                size="sm", 
+                                color="secondary", 
+                                outline=True
+                            )
+                        ], size="sm", style={'width': '220px'})
+                    ], className="d-flex align-items-center mb-3 p-2 border-bottom"),
+                ]),
+                # View parameters: adjust the x-axis window
+                html.Div([
+                    html.H4("View Parameters", className="fw-bold mb-0 me-3", style={'white-space': 'nowrap'}),
+                    html.Span("Pre-Stim (s):", className="me-2 small fw-bold"),
+                    dbc.Input(id='pre-stim-window-input', type='number', value=1, step=0.05, size="sm", style={'width': '80px'}, className="me-4"),
+                    html.Span("Post-Stim (s):", className="me-2 small fw-bold"),
+                    dbc.Input(id='post-stim-window-input', type='number', value=2, step=0.05, size="sm", style={'width': '80px'}), # Added comma here
                     html.Div([
-                        html.H4("View Parameters", className="fw-bold mb-0 me-3", style={'white-space': 'nowrap'}),
-                        html.Span("Pre-Stim (s):", className="me-2 small fw-bold"),
-                        dbc.Input(id='pre-stim-window-input', type='number', value=1, step=0.05, size="sm", style={'width': '80px'}, className="me-4"),
-                        html.Span("Post-Stim (s):", className="me-2 small fw-bold"),
-                        dbc.Input(id='post-stim-window-input', type='number', value=2, step=0.05, size="sm", style={'width': '80px'})
-                    ], className="d-flex align-items-center mb-3"),
-                    html.Hr(className="my-2"),
-                    # Trial viewer graph
-                    dbc.Row([
-                        dbc.Col([
-                            dcc.Graph(id='trial-graph', style={'height': '50vh'})
-                        ], width=12) 
-                    ]),
-                    # Results panel: displays calculated metrics for the current trial
+                        dbc.Button(
+                            "Discard Trial", 
+                            id="discard-button", 
+                            color="outline-danger", 
+                            size="sm",
+                            style={'width': '140px'}
+                        ),
+                    ], className="ms-auto")
+                ], className="d-flex align-items-center mb-3"),
+                html.Hr(className="my-2"),
+                # Trial viewer graph
+                dbc.Row([
+                    dbc.Col([
+                        dcc.Graph(id='trial-graph', style={'height': '50vh'})
+                    ], width=12) 
+                ]),
+                # Results panel: displays calculated metrics for the current trial
+                html.Div([
                     html.Div([
-                        html.Div([
-                            html.H4("Trial Metrics", className="fw-bold mb-0"),
-                            dbc.Button([
-                                html.I(className="fas fa-download me-2"),
-                                "Download Trial"
-                            ], id="btn-download-trial", color="primary", outline=True, size="sm")
-                        ], className="d-flex justify-content-between align-items-center mb-2"),
-                        
-                        html.Div(id='trial-metrics-display'), 
-                    ], className="mt-4")
-                ], className="p-3")
-            ]
-        ),
-    ])
- ])
+                        html.H4("Trial Metrics", className="fw-bold mb-0"),
+                        dbc.Button([
+                            html.I(className="fas fa-download me-2"),
+                            "Download Trial"
+                        ], id="btn-download-trial", color="primary", outline=True, size="sm")
+                    ], className="d-flex justify-content-between align-items-center mb-2"),
+                    
+                    html.Div(id='trial-metrics-display'), 
+                ], className="mt-4")
+            ], className="p-3")
+                            ]
+                                    )
+                                            ])
+                                                    ])
 
 
 # Add dcc.Store components to save the identified comment types and reference values
@@ -642,11 +652,13 @@ app.layout.children.append(dcc.Store(id = 'rfd-right-store'))
 app.layout.children.append(dcc.Store(id = 'force-channels-store'))
 app.layout.children.append(dcc.Store(id = 'emg-channels-store'))
 THRESHOLD_CACHE = {} # EMG threshold cache
+dcc.Store(id='discarded-trials-store', data = [], storage_type = 'session') # Store for discarded trials
 # Navigation system
 # ---------------------------------------------------
 app.layout.children.append(dcc.Store(id = 'ui-generator-signal-store'))
 app.layout.children.append(dcc.Store(id = 'current-stim-time-store'))
 app.layout.children.append(dcc.Store(id = 'current-trial-metrics-store'))
+
 
 
 # ==============================================================================
@@ -719,6 +731,7 @@ def upload_signal_data_callback(signal_contents, signal_filename):
             print(f"Comment's count: {comment_summary}")
             print(f"Block comments: {block_comments}")
             print(f"Stimulus comments: {stimulus_comments}")
+            print(f"Total rows tagged as True for block start: {df['is_block_start'].sum()}")
             print(message)
 
             return session_id, block_comments, stimulus_comments, message,  SUCCESS_UPLOAD_STYLE
@@ -1180,13 +1193,16 @@ def handle_trial_navigation(
     Output('trial-metrics-display', 'children'),
     Output('current-stim-time-store', 'data'),
     Output('current-trial-metrics-store', 'data'),
-    
+    Output('discard-button', 'children'),
+    Output('discard-button', 'color'),
     # --- Triggers ---
     Input('block-selector-dropdown', 'value'),
     Input('trial-selector-dropdown', 'value'),
        # Force signal processing ---
     Input('force-filter-check', 'value'),
     Input('force-cutoff-input', 'value'),
+        # --- Discarded Trials Store ---
+    Input("discarded-trials-store", "data"),
     # --- Data Sources ---
     State('condition-data-store', 'data'),
     State('signal-data-store', 'data'),
@@ -1213,7 +1229,6 @@ def handle_trial_navigation(
     State('analysis-rfd-window-input', 'value'),
     State('input-rfd-left', 'value'),
     State('input-rfd-right', 'value'),
-
     # --- EMG Analysis Checkboxes ---
     State('analysis-pmrt-checkbox', 'value'),
     State('analysis-rms-checkbox', 'value'),
@@ -1223,7 +1238,9 @@ def handle_trial_navigation(
     State('emg-h-offset-input', 'value'),
 )
 def update_trial_data(
-    selected_block, selected_trial, force_filter_val, force_cutoff_hz, condition_data_dict, session_id,
+    selected_block, selected_trial, force_filter_val, force_cutoff_hz,
+    current_discards,
+    condition_data_dict, session_id,
     channel_map, trial_lookup_dict, pre_window, post_window,
     mvc_left, mvc_right,
     min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
@@ -1253,6 +1270,14 @@ def update_trial_data(
     if matching_trials.empty:
         raise PreventUpdate
     global_index_to_use = matching_trials['global_index'].iloc[0]
+
+    current_discards = current_discards or []
+
+    if global_index_to_use in current_discards:
+        btn_text, btn_color = "Undo Discard", "success",
+    else:
+        btn_text, btn_color = "Discard Trial", "danger"
+
 
     # Call function to get the base metrics (threshold, stim_time, etc.)
     # and the DataFrame for the user's visualization window.
@@ -1605,7 +1630,7 @@ def update_trial_data(
 
     stim_time = base_metrics.get('stim_time')
 
-    return fig, metrics_layout, stim_time, base_metrics
+    return fig, metrics_layout, stim_time, base_metrics, btn_text, btn_color
 
 
 # Callback for updating the trial viewer
@@ -1665,6 +1690,35 @@ def update_graph_view(
     
     return fig
 
+# Callback for discarding/undiscarding trials
+# --------------------------------------------
+@app.callback(
+    Output("discarded-trials-store", "data"),
+    Input("discard-button", "n_clicks"),
+    [State("trial-lookup-store", "data"),
+     State("block-selector-dropdown", "value"),
+     State("trial-selector-dropdown", "value"),
+     State("discarded-trials-store", "data")],
+    prevent_initial_call=True
+)
+def manage_discard_list(n_clicks, lookup_data, block, trial, current_discards):
+    if block is None or trial is None:
+        raise PreventUpdate
+
+    # Get the global index for the current selection
+    lookup_df = pd.DataFrame(lookup_data)
+    idx = lookup_df.query("block_number == @block and trial_number == @trial")['global_index'].iloc[0]
+    
+    current_discards = current_discards or []
+    new_discards = list(current_discards)
+    
+    # Toggle the integer ID
+    if idx in new_discards:
+        new_discards.remove(idx)
+    else:
+        new_discards.append(idx)
+        
+    return new_discards
 
 # Callback for trial data download
 # ---------------------------------------
@@ -1699,6 +1753,8 @@ def update_graph_view(
     State('emg-min-duration-input', 'value'),
     State('emg-h-onset-input', 'value'), 
     State('emg-h-offset-input', 'value'),
+    # --- Discard Store ---
+    State('discarded-trials-store', 'data'),
     prevent_initial_call=True,
 )
 def handle_bulk_metrics_download(
@@ -1707,7 +1763,8 @@ def handle_bulk_metrics_download(
     min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
     run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral,
     run_mean_force, run_rfd, rfd_window_ms,
-    run_pmrt, run_emg_rms, emg_min_duration_ms, emg_h_onset, emg_h_offset
+    run_pmrt, run_emg_rms, emg_min_duration_ms, emg_h_onset, emg_h_offset,
+    current_discards # Added argument
 ):
     if not n_clicks:
         raise PreventUpdate
@@ -1718,6 +1775,9 @@ def handle_bulk_metrics_download(
     full_df = pd.read_feather(filepath)
     trial_lookup = pd.DataFrame(lookup_dict)
     condition_data = pd.DataFrame(condition_dict)
+    
+    # Ensure discards is a list for the 'in' check
+    current_discards = current_discards or []
     
     all_final_metrics = []
 
@@ -1731,6 +1791,9 @@ def handle_bulk_metrics_download(
             trial_index=global_idx, channel_map=channel_map, mvc_left=mvc_left, mvc_right=mvc_right,
             pre_window=pre_window, post_window=post_window
         )
+
+        # --- ADD DISCARD FLAG ---
+        base_metrics['discarded_flag'] = 1 if global_idx in current_discards else 0
 
         # Peak finder
         peak_info = fa.find_main_contraction_peak(
@@ -1749,7 +1812,6 @@ def handle_bulk_metrics_download(
             peak_time = peak_info['peak_time']
             
             # Peak & Timing
-            # ---------------
             base_metrics.update({
                 'peak_time': peak_info['peak_time'],
                 'peak_value': peak_info['peak_value'],
@@ -1757,7 +1819,6 @@ def handle_bulk_metrics_download(
             })
 
             # Onset/Offset for Force
-            # ------------------------
             onset_time = fa.find_contraction_onset(analysis_df, base_metrics['stim_time'], peak_time, base_metrics['response_hand'])
             offset_time = fa.find_contraction_offset(analysis_df, peak_time, peak_info['peak_value'], base_metrics['response_hand'])
             baseline = fa.find_baseline_force(analysis_df, peak_time, base_metrics['response_hand'])
@@ -1766,7 +1827,6 @@ def handle_bulk_metrics_download(
             base_metrics['force_offset_time'] = offset_time
 
             # Calculate Individual Metrics
-            # ------------------------------
             if run_peak_force:
                 mvc_val = mvc_right if base_metrics['response_hand'] == 'right' else mvc_left
                 base_metrics.update(fa.peak_force_metrics(base_metrics['peak_value'], peak_time, base_metrics['stim_time'], base_metrics['threshold'], mvc_val))
@@ -1777,11 +1837,9 @@ def handle_bulk_metrics_download(
             if run_rfd:
                 base_metrics.update(fa.calculate_rfd(analysis_df, onset_time, peak_time, baseline, base_metrics['response_hand'], rfd_window_ms))
 
-            #  EMG analyses
-            # ---------------- 
+            # EMG analyses
             if (channel_map.get('emg_left') and channel_map.get('emg_right')) and (run_pmrt or run_emg_rms):
                 try:
-                    # Dual Threshold Detection
                     on_thresh = ea.calculate_dynamic_threshold(analysis_df, channel_map, base_metrics['response_hand'], 0.1, emg_h_onset)
                     off_thresh = ea.calculate_dynamic_threshold(analysis_df, channel_map, base_metrics['response_hand'], 0.1, emg_h_offset)
                     
@@ -1791,12 +1849,12 @@ def handle_bulk_metrics_download(
                         base_metrics['premotor_reaction_time'] = (emg_on - base_metrics['stim_time']) * 1000
                         if run_emg_rms:
                             base_metrics['emg_rms'] = ea.calculate_emg_rms(analysis_df, channel_map, base_metrics['response_hand'], emg_on, emg_off)
-                except: pass
+                except: 
+                    pass
 
         all_final_metrics.append(base_metrics)
 
     # Save to CSV
-    # --------------
     final_df = pd.DataFrame(all_final_metrics)
     
     print(f"✅ Bulk Export Complete: {len(final_df)} trials analyzed.")

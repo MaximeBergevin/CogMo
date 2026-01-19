@@ -36,14 +36,7 @@ def _is_data_row(line_text: str, delimiter: str = '\t') -> bool:
 def load_signal(filepath: Path) -> tuple[pd.DataFrame, dict]:
     """
     Loads signal data from TSV, CSV, or XLSX files with automated marker detection.
-    
-    This function performs two main tasks:
-    1. Parses the raw file into a structured DataFrame.
-    2. Analyzes embedded 'comments' to automatically identify Block and Trial starts.
     """
-    
-    # 1. File Type Validation and Reading
-    # ----------------------------------
     file_extension = filepath.suffix.lower()
     
     if file_extension in ['.tsv', '.csv', '.txt']:
@@ -53,65 +46,44 @@ def load_signal(filepath: Path) -> tuple[pd.DataFrame, dict]:
     elif file_extension in ['.xlsx']:
         data_frame = pd.read_excel(filepath)
     else:
-        raise ValueError("Unsupported file format. Please upload a .tsv, .csv, or .xlsx file.")
+        raise ValueError("Unsupported file format.")
     
-    # --- Marker Identification Logic ---
-    # Scientific recording software often embeds comments into the signal stream.
-    # Frequency analysis used to distinguish experimental levels.
     comment_summary = {}
     
     if 'comments' in data_frame.columns:
-        # Standardize comment column to string type
-        data_frame['comments'] = data_frame['comments'].astype(str).replace('<NA>', '') # Ensure comments are strings; error otherwise
+        # Standardize comments: handle missing/NaN values
+        data_frame['comments'] = data_frame['comments'].astype(str).replace(['<NA>', 'nan', 'None'], '')
 
-        # Filter out empty strings and count occurrences of unique markers
-        comment_counts = data_frame['comments'].value_counts().drop(labels=[''], errors='ignore')
-        comment_summary = comment_counts.to_dict() # PD series to dictionnary
+        # 1. Populate summary with raw counts for UI visibility
+        raw_counts = data_frame['comments'].value_counts().drop(labels=[''], errors='ignore')
+        comment_summary = raw_counts.to_dict()
 
-        if comment_counts.empty:
-            warnings.warn("No comments found in the data, cannot create block or trial columns.")
-        else:
-            # HEURISTIC: Block markers occur least frequently (e.g., once per block).
-            block_comment_type = comment_counts.sort_values().index[0]
+        # Inner helper to group markers (e.g., 'stim_left' -> 'stim')
+        def get_comment_base(comment_str):
+            """Removes direction suffixes to find the base name."""
+            base = re.sub(r'[-_\s]?(left|right|none|l|r|n)$', '', comment_str, flags=re.IGNORECASE)
+            return base.strip()
+
+        if not raw_counts.empty:
+            # 2. Heuristic: Use normalized "Base Names" for frequency decisions
+            data_frame['comment_base'] = data_frame['comments'].apply(get_comment_base)
+            base_counts = data_frame['comment_base'].value_counts().drop(labels=[''], errors='ignore')
+
+            # Block markers are rare; Trial markers are frequent
+            block_base_type = base_counts.sort_values().index[0]
+            trial_base_type = base_counts.sort_values(ascending=False).index[0]
+
+            # 3. Create structural boolean flags
+            data_frame['is_block_start'] = (data_frame['comment_base'] == block_base_type)
+            data_frame['is_trial_start'] = (data_frame['comment_base'] == trial_base_type)
             
-            # Remove the block comment from the pool of candidates
-            potential_trial_comments = comment_counts.drop(block_comment_type)
-
-            # HEURISTIC: Trial markers occur most frequently. We group them by base name 
-            # to handle direction-specific markers (e.g., 'stim_left' and 'stim_right').
-            def get_comment_base(comment_str):
-                """Removes a direction suffix to find the base name."""
-                base = re.sub(r'[-_\s]?(left|right|l|r)$', '', comment_str, flags=re.IGNORECASE)
-                return base.strip()
-
-            # Group remaining comments by their base name
-            comment_groups = {}
-            for comment in potential_trial_comments.index:
-                base = get_comment_base(comment)
-                if base not in comment_groups:
-                    comment_groups[base] = []
-                comment_groups[base].append(comment)
+            # 4. Generate numbering
+            data_frame['block_number'] = data_frame['is_block_start'].fillna(False).cumsum()
+            # Grouping by block ensures trial numbers reset to 1 at each new block
+            data_frame['trial_number'] = data_frame.groupby('block_number')['is_trial_start'].fillna(False).cumsum()
             
-            # Identify the group with the highest combined frequency as the 'Trial Start'
-            max_count = 0
-            stimulus_comment_types = [] 
-            for base, comments in comment_groups.items():
-                total_count = sum(potential_trial_comments[c] for c in comments)
-                if total_count > max_count:
-                    max_count = total_count
-                    stimulus_comment_types = comments
-
-            # --- Structural Column Generation ---
-            # If markers are found, generate boolean flags and cumulative counters.
-            if block_comment_type and stimulus_comment_types:
-                data_frame['is_block_start'] = (data_frame['comments'] == block_comment_type)
-                data_frame['is_trial_start'] = data_frame['comments'].isin(stimulus_comment_types)
-
-                # Generate Block and Trial numbers via cumulative sum
-                data_frame['block_number'] = data_frame['is_block_start'].cumsum()
-                data_frame['trial_number'] = data_frame.groupby('block_number')['is_trial_start'].cumsum()
-            else:
-                warnings.warn("Could not robustly determine block and stimulus comments from counts.")
+            # Clean up temporary processing column
+            data_frame.drop(columns=['comment_base'], inplace=True)
     
     return data_frame, comment_summary
 
@@ -215,9 +187,15 @@ def _process_text_file(lines: list[str], file_extension: str) -> pd.DataFrame:
     # Cast signal columns to numeric and markers to string
     for col in df.columns:
         if col != 'comments':
+            df[col] = df[col].astype(str).str.replace(',', '.')  # Handle localized decimal formats
             df[col] = pd.to_numeric(df[col], errors='coerce')
         if col == 'comments':
             df[col] = df[col].astype('string')
+
+    if 'time' in df.columns:
+        # Detect sampling interval from the first couples rows
+        dt = df['time'].iloc[1] - df['time'].iloc[0]
+        df['time'] = df.index * dt
     
     return df
 
