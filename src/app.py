@@ -1753,6 +1753,8 @@ def manage_discard_list(n_clicks, lookup_data, block, trial, current_discards):
     State('emg-min-duration-input', 'value'),
     State('emg-h-onset-input', 'value'), 
     State('emg-h-offset-input', 'value'),
+    # --- Discard Store ---
+    State('discarded-trials-store', 'data'),
     prevent_initial_call=True,
 )
 def handle_bulk_metrics_download(
@@ -1761,7 +1763,8 @@ def handle_bulk_metrics_download(
     min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
     run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral,
     run_mean_force, run_rfd, rfd_window_ms,
-    run_pmrt, run_emg_rms, emg_min_duration_ms, emg_h_onset, emg_h_offset
+    run_pmrt, run_emg_rms, emg_min_duration_ms, emg_h_onset, emg_h_offset,
+    current_discards # Added argument
 ):
     if not n_clicks:
         raise PreventUpdate
@@ -1772,6 +1775,9 @@ def handle_bulk_metrics_download(
     full_df = pd.read_feather(filepath)
     trial_lookup = pd.DataFrame(lookup_dict)
     condition_data = pd.DataFrame(condition_dict)
+    
+    # Ensure discards is a list for the 'in' check
+    current_discards = current_discards or []
     
     all_final_metrics = []
 
@@ -1785,6 +1791,9 @@ def handle_bulk_metrics_download(
             trial_index=global_idx, channel_map=channel_map, mvc_left=mvc_left, mvc_right=mvc_right,
             pre_window=pre_window, post_window=post_window
         )
+
+        # --- ADD DISCARD FLAG ---
+        base_metrics['discarded_flag'] = 1 if global_idx in current_discards else 0
 
         # Peak finder
         peak_info = fa.find_main_contraction_peak(
@@ -1803,7 +1812,6 @@ def handle_bulk_metrics_download(
             peak_time = peak_info['peak_time']
             
             # Peak & Timing
-            # ---------------
             base_metrics.update({
                 'peak_time': peak_info['peak_time'],
                 'peak_value': peak_info['peak_value'],
@@ -1811,7 +1819,6 @@ def handle_bulk_metrics_download(
             })
 
             # Onset/Offset for Force
-            # ------------------------
             onset_time = fa.find_contraction_onset(analysis_df, base_metrics['stim_time'], peak_time, base_metrics['response_hand'])
             offset_time = fa.find_contraction_offset(analysis_df, peak_time, peak_info['peak_value'], base_metrics['response_hand'])
             baseline = fa.find_baseline_force(analysis_df, peak_time, base_metrics['response_hand'])
@@ -1820,7 +1827,6 @@ def handle_bulk_metrics_download(
             base_metrics['force_offset_time'] = offset_time
 
             # Calculate Individual Metrics
-            # ------------------------------
             if run_peak_force:
                 mvc_val = mvc_right if base_metrics['response_hand'] == 'right' else mvc_left
                 base_metrics.update(fa.peak_force_metrics(base_metrics['peak_value'], peak_time, base_metrics['stim_time'], base_metrics['threshold'], mvc_val))
@@ -1831,11 +1837,9 @@ def handle_bulk_metrics_download(
             if run_rfd:
                 base_metrics.update(fa.calculate_rfd(analysis_df, onset_time, peak_time, baseline, base_metrics['response_hand'], rfd_window_ms))
 
-            #  EMG analyses
-            # ---------------- 
+            # EMG analyses
             if (channel_map.get('emg_left') and channel_map.get('emg_right')) and (run_pmrt or run_emg_rms):
                 try:
-                    # Dual Threshold Detection
                     on_thresh = ea.calculate_dynamic_threshold(analysis_df, channel_map, base_metrics['response_hand'], 0.1, emg_h_onset)
                     off_thresh = ea.calculate_dynamic_threshold(analysis_df, channel_map, base_metrics['response_hand'], 0.1, emg_h_offset)
                     
@@ -1845,12 +1849,12 @@ def handle_bulk_metrics_download(
                         base_metrics['premotor_reaction_time'] = (emg_on - base_metrics['stim_time']) * 1000
                         if run_emg_rms:
                             base_metrics['emg_rms'] = ea.calculate_emg_rms(analysis_df, channel_map, base_metrics['response_hand'], emg_on, emg_off)
-                except: pass
+                except: 
+                    pass
 
         all_final_metrics.append(base_metrics)
 
     # Save to CSV
-    # --------------
     final_df = pd.DataFrame(all_final_metrics)
     
     print(f"✅ Bulk Export Complete: {len(final_df)} trials analyzed.")
