@@ -205,58 +205,44 @@ def calculate_rfd(
 
 def find_baseline_force(
     signal_df: pd.DataFrame,
-    peak_time: float,
+    stim_time: float,  # Changed from peak_time
     response_hand: str
 ) -> Optional[float]:
     """
-    Identifies a stable pre-contraction baseline via iterative window searching.
-    
-    The algorithm searches 50ms windows before the peak. If the standard deviation 
-    is high (> 1.0), it shifts the window to avoid signal drift or early onset 
-    interference until a stable mean is found.
+    Identifies a stable pre-contraction baseline by searching forward 
+    starting from the beginning of the pre-stimulus window.
     """
     force_col = f"force_{response_hand}"
+    
+    #  Define a fixed search zone: From 800ms before stim to 100ms before stim
+    search_start = stim_time
+    search_end = stim_time + 0.500
+    
+    # Iterate forward in 50ms steps within candidate quiet zone
+    window_size = 0.050
+    current_start = search_start
+    
+    best_baseline = None
+    lowest_sd = float('inf')
 
-    # Initialize 50 ms window starting 250ms before the peak
-    baseline_start = peak_time - 0.250
-    baseline_end = baseline_start + 0.050
-    shift_s = 0.050  # 50 ms
-    max_iter = 10
-
-    for _ in range(max_iter):
-        # Ensure the window does not go before the start of the signal
-        if baseline_start < signal_df['time'].min():
-            break
-
-        baseline_df = signal_df[
-            (signal_df['time'] >= baseline_start) & (signal_df['time'] < baseline_end)
+    while current_start + window_size <= search_end:
+        window_df = signal_df[
+            (signal_df['time'] >= current_start) & 
+            (signal_df['time'] < current_start + window_size)
         ]
-
-        if len(baseline_df) < 2: # Need at least 2 points for std dev
-            break
-
-        baseline_sd = baseline_df[force_col].std()
-
-        if baseline_sd <= 1.0:
-            # Stable baseline found, return its mean
-            return baseline_df[force_col].mean()
-
-        # Check for drift and shift the window in the opposite direction
-        half_idx = len(baseline_df) // 2
-        early_mean = baseline_df[force_col].iloc[:half_idx].mean()
-        late_mean = baseline_df[force_col].iloc[half_idx:].mean()
-
-        if late_mean > early_mean:
-            # Drift is upward, so the contraction might be starting. Shift earlier.
-            baseline_start -= shift_s
-            baseline_end -= shift_s
-        else:
-            # Drift is downward or stable. Shift later to get closer to onset.
-            baseline_start += shift_s
-            baseline_end += shift_s
+        
+        if len(window_df) >= 2:
+            current_sd = window_df[force_col].std()
+            current_mean = window_df[force_col].mean()
             
-    # If the loop finishes without finding a stable baseline
-    return None
+            # Look for the most stable window in this pre-stim period
+            if current_sd < lowest_sd:
+                lowest_sd = current_sd
+                best_baseline = current_mean
+        
+        current_start += 0.025 # 25ms sliding step for better resolution
+        
+    return best_baseline
 
 
 
@@ -482,8 +468,8 @@ def find_main_contraction_peak(
     peak_value = target_peak['abs_force']
 
     # 4. Create Analysis Window
-    analysis_start = peak_time - 1.25
-    analysis_end = peak_time + 1.25
+    analysis_start = stim_time - 0.5
+    analysis_end = stim_time + 2.0
     analysis_df = full_df[(full_df['time'] >= analysis_start) & (full_df['time'] <= analysis_end)]
 
     return {

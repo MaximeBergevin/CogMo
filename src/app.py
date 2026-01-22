@@ -1370,10 +1370,11 @@ def update_trial_data(
                 
                 baseline = fa.find_baseline_force(
                     signal_df=analysis_df,
-                    peak_time=peak_time,
+                    stim_time=base_metrics['stim_time'],
                     response_hand=base_metrics['response_hand']
                 )
                 base_metrics['baseline_force'] = baseline
+                print(f"Baseline force: {baseline}")
 
         # Calculate final leaf metrics
         
@@ -1489,7 +1490,7 @@ def update_trial_data(
 
                 # Detect EMG boundaries using dual thresholds
                 onset_time, offset_time, active_threshold = ea.find_emg_boundaries(
-                    signal_df=viz_df,
+                    signal_df=analysis_df,
                     channel_map=channel_map,
                     response_hand=base_metrics['response_hand'],
                     stim_time=base_metrics['stim_time'],
