@@ -205,24 +205,25 @@ def calculate_rfd(
 
 def find_baseline_force(
     signal_df: pd.DataFrame,
-    stim_time: float,  # Changed from peak_time
+    stim_time: float,
     response_hand: str
-) -> Optional[float]:
+) -> Dict[str, Optional[float]]:
     """
-    Identifies a stable pre-contraction baseline by searching forward 
-    starting from the beginning of the pre-stimulus window.
+    Identifies the most stable pre-contraction window and returns 
+    both the mean (baseline) and its specific standard deviation (noise).
     """
     force_col = f"force_{response_hand}"
     
-    #  Define a fixed search zone: From 800ms before stim to 100ms before stim
+    # Define a fixed search zone: From 800ms before stim to 100ms before stim
+    # (Adjusted based on your previous 'out of bounds' fix)
     search_start = stim_time
     search_end = stim_time + 0.500
     
-    # Iterate forward in 50ms steps within candidate quiet zone
     window_size = 0.050
     current_start = search_start
     
-    best_baseline = None
+    best_mean = None
+    best_sd = None
     lowest_sd = float('inf')
 
     while current_start + window_size <= search_end:
@@ -233,17 +234,15 @@ def find_baseline_force(
         
         if len(window_df) >= 2:
             current_sd = window_df[force_col].std()
-            current_mean = window_df[force_col].mean()
             
-            # Look for the most stable window in this pre-stim period
             if current_sd < lowest_sd:
                 lowest_sd = current_sd
-                best_baseline = current_mean
+                best_sd = current_sd
+                best_mean = window_df[force_col].mean()
         
-        current_start += 0.025 # 25ms sliding step for better resolution
+        current_start += 0.025 
         
-    return best_baseline
-
+    return {'mean': best_mean, 'sd': best_sd}
 
 
 def find_contraction_offset(
@@ -266,8 +265,8 @@ def find_contraction_offset(
     # --- Iteratively search for a stable post-peak baseline window ---
     baseline_start = peak_time + 0.150
     baseline_end = baseline_start + 0.050
-    shift_s = 0.050  # 50 ms
-    max_iter = 10
+    shift_s = 0.10 
+    max_iter = 50
     threshold = None
 
     for _ in range(max_iter):
@@ -288,7 +287,7 @@ def find_contraction_offset(
         baseline_sd = baseline_df[force_col].std()
         
         # A baseline is stable if its SD is low AND its mean is low relative to the peak
-        if baseline_sd <= 1.0 and baseline_mean <= relative_guard:
+        if baseline_sd <= 0.05 and baseline_mean <= relative_guard:
             threshold = baseline_mean + (3 * baseline_sd)
             break # Stable baseline found
 
@@ -316,64 +315,68 @@ def find_contraction_onset(
     signal_df: pd.DataFrame,
     stim_time: float,
     peak_time: float,
+    peak_value: float,
     response_hand: str
 ) -> Optional[float]:
     """
-    Identifies the start of the force contraction (onset).
-    
-    Logic follows the same iterative thresholding as offset detection, but 
-    scans backward from the peak to find the last point where force was at baseline.
+    Identifies the onset by scanning backward from the peak.
+    Iteratively searches for a stable baseline before the contraction 
+    to establish a 3SD threshold.
     """
     force_col = f"force_{response_hand}"
+
+    # Guard: Baseline must be < 20% of peak to avoid the contraction ramp
+    relative_guard = 0.20 * abs(peak_value)
     
-    # Iteratively search for a stable baseline window
-    baseline_start = peak_time - 0.250
-    baseline_end = baseline_start + 0.050
-    shift_s = 0.050  # 50 ms
-    max_iter = 10
+    # --- Iterative search moving BACKWARD from peak ---
+    # Start the search window just before the peak ramp
+    baseline_end = peak_time - 0.050 
+    baseline_start = baseline_end - 0.050
+    shift_s = 0.010 
+    max_iter = 50
     threshold = None
 
     for _ in range(max_iter):
+        # Don't search before the stimulus/recording start
+        if baseline_start < signal_df['time'].min():
+            break
 
         baseline_df = signal_df[
             (signal_df['time'] >= baseline_start) & (signal_df['time'] < baseline_end)
         ]
         
         if baseline_df.empty:
-            break
-
-        baseline_sd = baseline_df[force_col].std()
-        
-        if baseline_sd <= 1.0:
-            baseline_mean = baseline_df[force_col].mean()
-            threshold = baseline_mean + (3 * baseline_sd)
-            break # Stable baseline found
-        
-        # Shift the window based on drift direction
-        half_idx = len(baseline_df) // 2
-        early_mean = baseline_df[force_col].iloc[:half_idx].mean()
-        late_mean = baseline_df[force_col].iloc[half_idx:].mean()
-        
-        if late_mean > early_mean:
             baseline_start -= shift_s
             baseline_end -= shift_s
-        else:
-            baseline_start += shift_s
-            baseline_end += shift_s
+            continue
 
+        baseline_mean = baseline_df[force_col].mean()
+        baseline_sd = baseline_df[force_col].std()
+        
+        # Stability logic: Low SD and below the 20% peak guard
+        if baseline_sd <= 0.05 and baseline_mean <= relative_guard:
+            threshold = baseline_mean + (3 * baseline_sd)
+            break 
+
+        baseline_start -= shift_s
+        baseline_end -= shift_s
+    
     if threshold is None:
-        return None # No stable baseline was found
+        return None 
 
-    # Scan backward from the peak to find the last point at or below the threshold
-    onset_window_df = signal_df[
+    # --- Scan backward from the peak to find the breakaway point ---
+    # Look for the first point (moving back) that hits the baseline threshold
+    search_window = signal_df[
         (signal_df['time'] >= stim_time) & (signal_df['time'] <= peak_time)
     ]
-    onset_candidates = onset_window_df[onset_window_df[force_col] <= threshold]
     
-    if onset_candidates.empty:
-        return None
+    # The max time below threshold is the definitive 'start' of the squeeze
+    at_baseline = search_window[search_window[force_col] <= threshold]
+    
+    if at_baseline.empty:
+        return stim_time 
 
-    return onset_candidates['time'].max()
+    return at_baseline['time'].max()
 
 
 def find_main_contraction_peak(

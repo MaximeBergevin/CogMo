@@ -181,7 +181,7 @@ def create_trial_figure(
 
     # --- Visualization for Impulse (AUC) ---
     if run_force_time_integral and has_analyzed_segment:
-        baseline_force = trial_metrics['baseline_force']
+        baseline_force = trial_metrics['baseline_mean']
         response_hand = trial_metrics.get('response_hand')
         force_col = f"force_{response_hand}"
         
@@ -1347,6 +1347,15 @@ def update_trial_data(
             
             mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
             peak_time = base_metrics['stim_time'] + base_metrics['time_to_peak']
+
+            baseline_results = fa.find_baseline_force(
+                signal_df=analysis_df,
+                stim_time=base_metrics['stim_time'],
+                response_hand=base_metrics['response_hand']
+            )
+            base_metrics['baseline_mean'] = baseline_results['mean']
+            base_metrics['baseline_sd']   = baseline_results['sd']
+            print(f"Baseline force: {base_metrics['baseline_mean']}, SD: {base_metrics['baseline_sd']}")
             
             # Find onset time (needed for MRT, FTI, Mean Force, RFD)
             if run_motor_reaction_time or run_force_time_integral or run_mean_force or run_rfd:
@@ -1354,6 +1363,7 @@ def update_trial_data(
                     signal_df=analysis_df,
                     stim_time=base_metrics['stim_time'],
                     peak_time=peak_time,
+                    peak_value=base_metrics['peak_value'],
                     response_hand=base_metrics['response_hand']
                 )
                 base_metrics['force_onset_time'] = onset_time
@@ -1368,13 +1378,6 @@ def update_trial_data(
                 )
                 base_metrics['force_offset_time'] = offset_time
                 
-                baseline = fa.find_baseline_force(
-                    signal_df=analysis_df,
-                    stim_time=base_metrics['stim_time'],
-                    response_hand=base_metrics['response_hand']
-                )
-                base_metrics['baseline_force'] = baseline
-                print(f"Baseline force: {baseline}")
 
         # Calculate final leaf metrics
         
@@ -1408,26 +1411,26 @@ def update_trial_data(
                 base_metrics['motor_response_time'] = mrspt_val
 
         if run_force_time_integral:
-            if all(k in base_metrics for k in ['force_onset_time', 'force_offset_time', 'baseline_force']):
+            if all(k in base_metrics for k in ['force_onset_time', 'force_offset_time', 'baseline_mean']):
                 mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
                 impulse_metrics = fa.calculate_impulse(
                     signal_df=analysis_df,
                     onset_time=base_metrics['force_onset_time'],
                     offset_time=base_metrics['force_offset_time'],
-                    baseline_force=base_metrics['baseline_force'],
+                    baseline_force=base_metrics['baseline_mean'],
                     mvc_value=mvc_val,
                     response_hand=base_metrics['response_hand']
                 )
                 base_metrics.update(impulse_metrics)
         
         if run_mean_force:
-            if all(k in base_metrics for k in ['force_onset_time', 'force_offset_time', 'baseline_force']):
+            if all(k in base_metrics for k in ['force_onset_time', 'force_offset_time', 'baseline_mean']):
                 mvc_val = mvc_right if base_metrics.get('response_hand') == 'right' else mvc_left
                 mean_force_metrics = fa.calculate_mean_force(
                     signal_df=analysis_df,
                     onset_time=base_metrics['force_onset_time'],
                     offset_time=base_metrics['force_offset_time'],
-                    baseline_force=base_metrics['baseline_force'],
+                    baseline_force=base_metrics['baseline_mean'],
                     mvc_value=mvc_val,
                     response_hand=base_metrics['response_hand']
                 )
@@ -1439,7 +1442,7 @@ def update_trial_data(
                     signal_df=analysis_df,
                     onset_time=base_metrics['force_onset_time'],
                     peak_time=base_metrics['peak_time'],
-                    baseline_force=base_metrics['baseline_force'],
+                    baseline_force=base_metrics['baseline_mean'],
                     response_hand=base_metrics['response_hand'],
                     early_rfd_window_ms=rfd_window_ms
                 )
