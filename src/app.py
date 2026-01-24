@@ -1355,6 +1355,8 @@ def update_trial_data(
             )
             base_metrics['baseline_mean'] = baseline_results['mean']
             base_metrics['baseline_sd']   = baseline_results['sd']
+            if base_metrics['threshold'] is not None:
+                base_metrics['threshold']     = base_metrics['threshold'] + base_metrics['baseline_mean'] # Adjust threshold relative to baseline
             print(f"Baseline force: {base_metrics['baseline_mean']}, SD: {base_metrics['baseline_sd']}")
             
             # Find onset time (needed for MRT, FTI, Mean Force, RFD)
