@@ -384,22 +384,6 @@ app.layout = dbc.Container([
                             ]),
                             width=6
                         ),
-                    ]),
-                    dbc.Row([
-                        dbc.Col(
-                            dbc.FormFloating([
-                                dbc.Input(type="number", id="input-rfd-left", placeholder="Left"),
-                                dbc.Label("Peak rate of force development (Left)")
-                            ]),
-                            width=6
-                        ),
-                        dbc.Col(
-                            dbc.FormFloating([
-                                dbc.Input(type="number", id="input-rfd-right", placeholder="Right"),
-                                dbc.Label("Peak rate of force development (Right)")
-                            ]),
-                            width=6
-                        ),
                     ]), 
                 ], className="p-3")
             ]
@@ -418,17 +402,17 @@ app.layout = dbc.Container([
                             html.H4("Force Signal Analyses"),
                             html.Hr(),
                             html.H6("Latencies", className="mt-3"),
-                            dbc.Checkbox(id="analysis-mrt-checkbox", label="Motor Reaction Time"),
-                            dbc.Checkbox(id="analysis-mrspt-checkbox", label="Motor Response Time"),
+                            dbc.Checkbox(id="analysis-mrt-checkbox", label="Motor Reaction Time", value=True),
+                            dbc.Checkbox(id="analysis-mrspt-checkbox", label="Motor Response Time", value=True),
                             
                             html.H6("Rate of Force", className="mt-4"),
                             dbc.Checkbox(id="analysis-rfd-checkbox", label="Rate of Force Development (RFD)", value=True),
-                            dbc.Input(id="analysis-rfd-window-input", type="number", value=75, placeholder="e.g., 75", disabled=False, className="mt-2 w-50"),
+                            dbc.Input(id="analysis-rfd-window-input", type="number", value=50, placeholder="e.g., 50", disabled=False, className="mt-2 w-50"),
 
                             html.H6("Force Magnitudes", className="mt-4"),
-                            dbc.Checkbox(id="analysis-peak-force-checkbox", label="Peak Force & Overshoot"),
-                            dbc.Checkbox(id="analysis-mean-force-checkbox", label="Mean Force"),
-                            dbc.Checkbox(id="analysis-fti-checkbox", label="Force-Time Integral"),
+                            dbc.Checkbox(id="analysis-peak-force-checkbox", label="Peak Force & Overshoot", value=True),
+                            dbc.Checkbox(id="analysis-mean-force-checkbox", label="Mean Force", value=True),
+                            dbc.Checkbox(id="analysis-fti-checkbox", label="Force-Time Integral", value=True),
                         ], width=6),
 
                         # --- EMG Analyses ---
@@ -436,9 +420,9 @@ app.layout = dbc.Container([
                             html.H4("EMG Signal Analyses"),
                             html.Hr(),
                             html.H6("Latency", className="mt-3"),
-                            dbc.Checkbox(id="analysis-pmrt-checkbox", label="Premotor Reaction Time"),
+                            dbc.Checkbox(id="analysis-pmrt-checkbox", label="Premotor Reaction Time", value=True),
                             html.H6("EMG Activity", className="mt-4"),
-                            dbc.Checkbox(id="analysis-rms-checkbox", label="Root Mean Square (RMS)"),
+                            dbc.Checkbox(id="analysis-rms-checkbox", label="Root Mean Square (RMS)", value=True),
                         ], width=6),
                     ]),
                     
@@ -459,7 +443,7 @@ app.layout = dbc.Container([
                         ], width=6, md=3),
                         dbc.Col([
                             dbc.Label("Pre-Stimulus Search (s)"),
-                            dbc.Input(id="pre-stim-search-input", type="number", value=0.5, step=0.1),
+                            dbc.Input(id="pre-stim-search-input", type="number", value=0, step=0.1),
                             dbc.Tooltip("How far before the stimulus to look for peaks.", target="pre-stim-search-input"),
                         ], width=6, md=3),
                         dbc.Col([
@@ -647,8 +631,6 @@ app.layout.children.append(dcc.Store(id = 'stimulus-comments-store'))
 # ---------------------------------------------------
 app.layout.children.append(dcc.Store(id = 'mvc-left-store'))
 app.layout.children.append(dcc.Store(id = 'mvc-right-store'))
-app.layout.children.append(dcc.Store(id = 'rfd-left-store'))
-app.layout.children.append(dcc.Store(id = 'rfd-right-store'))
 app.layout.children.append(dcc.Store(id = 'force-channels-store'))
 app.layout.children.append(dcc.Store(id = 'emg-channels-store'))
 THRESHOLD_CACHE = {} # EMG threshold cache
@@ -726,13 +708,13 @@ def upload_signal_data_callback(signal_contents, signal_filename):
                             stimulus_comments.append(comment_type)
 
             # TODO: Comment out for deployment, this is for debugging/testing purposes
-            print(f"Data's head:\n {df.head()}")
-            print(f"Session ID: {session_id}")
-            print(f"Comment's count: {comment_summary}")
-            print(f"Block comments: {block_comments}")
-            print(f"Stimulus comments: {stimulus_comments}")
-            print(f"Total rows tagged as True for block start: {df['is_block_start'].sum()}")
-            print(message)
+            #print(f"Data's head:\n {df.head()}")
+            #print(f"Session ID: {session_id}")
+            #print(f"Comment's count: {comment_summary}")
+            #print(f"Block comments: {block_comments}")
+            #print(f"Stimulus comments: {stimulus_comments}")
+            #print(f"Total rows tagged as True for block start: {df['is_block_start'].sum()}")
+            #print(message)
 
             return session_id, block_comments, stimulus_comments, message,  SUCCESS_UPLOAD_STYLE
         else:
@@ -798,7 +780,7 @@ def update_channel_mapping_ui(session_id):
         'emg_left'     : find_best_match(selectable_channels, emg_left_pattern)
     }
     #TODO: Comment out for deployment, this is for debugging/testing purposes
-    print(f"Channel names: {selectable_channels}")
+    #print(f"Channel names: {selectable_channels}")
 
     # Sets the initial state of the EMG checkbox based on auto-detection
     emg_detected = bool(detected_channels['emg_right'] and detected_channels['emg_left'])
@@ -927,7 +909,7 @@ def save_channel_mapping(time_col, fr_col, fl_col, er_col, el_col):
     }
 
     #TODO: Comment out for deployment, this is for debugging/testing purposes
-    print(f"Channel mapping updated:\n {channel_map}")
+    #print(f"Channel mapping updated:\n {channel_map}")
 
     return channel_map
 
@@ -1013,7 +995,7 @@ def upload_condition_callback(condition_contents, condition_filename):
         # Message not printed, but stored in dcc.Store linked to dcc.Loading for throbber 
         message = ""
         # TODO: Comment out for deployment, this is for debugging/testing purposes
-        print(f"Condition file's head:\n {df.head()}")
+        #print(f"Condition file's head:\n {df.head()}")
         return df.to_dict('records'), message, SUCCESS_UPLOAD_STYLE
     
     except Exception as e:
@@ -1025,16 +1007,12 @@ def upload_condition_callback(condition_contents, condition_filename):
 @app.callback(
     Output('mvc-left-store', 'data'),
     Output('mvc-right-store', 'data'),
-    Output('rfd-left-store', 'data'),
-    Output('rfd-right-store', 'data'),
     Input('input-mvc-left', 'value'),
     Input('input-mvc-right', 'value'),
-    Input('input-rfd-left', 'value'),
-    Input('input-rfd-right', 'value'),
     prevent_initial_callbacks=True
 )
-def update_reference_values(mvc_left, mvc_right, rfd_left, rfd_right):
-    return mvc_left, mvc_right, rfd_left, rfd_right
+def update_reference_values(mvc_left, mvc_right):
+    return mvc_left, mvc_right
 
 
 # Callback to enable/disable the RFD window input
@@ -1085,7 +1063,7 @@ def update_block_dropdown(signal, session_id):
     # Create lookup table to fetch block numbers
     trial_lookup = create_trial_lookup(df)
     if trial_lookup is None or trial_lookup.empty:
-        print("Trial lookup table is empty or could not be created.")
+        #("Trial lookup table is empty or could not be created.")
         return [], None, None # Clears the dropdown if inputs are missing
     
     blocks = sorted(trial_lookup['block_number'].unique())
@@ -1093,7 +1071,7 @@ def update_block_dropdown(signal, session_id):
     default_block = blocks[0] if blocks else None
 
     #TODO: Comment out for deployment, this is for debugging/testing purposes
-    print(f"Available blocks: {blocks}")
+    #print(f"Available blocks: {blocks}")
 
     return block_options, default_block, trial_lookup.to_dict('records')
 
@@ -1212,13 +1190,11 @@ def handle_trial_navigation(
     State('post-stim-window-input', 'value'),
     State('mvc-left-store', 'data'),
     State('mvc-right-store', 'data'),
-    
     # --- Peak Detection Settings ---
     State('min-valid-rt-input', 'value'),
     State('min-prominence-input', 'value'),
     State('pre-stim-search-input', 'value'),
     State('post-stim-search-input', 'value'),
-    
     # --- Analysis Checkboxes ---
     State('analysis-peak-force-checkbox', 'value'),
     State('analysis-mrspt-checkbox', 'value'),
@@ -1227,8 +1203,6 @@ def handle_trial_navigation(
     State('analysis-mean-force-checkbox', 'value'),
     State('analysis-rfd-checkbox', 'value'),
     State('analysis-rfd-window-input', 'value'),
-    State('input-rfd-left', 'value'),
-    State('input-rfd-right', 'value'),
     # --- EMG Analysis Checkboxes ---
     State('analysis-pmrt-checkbox', 'value'),
     State('analysis-rms-checkbox', 'value'),
@@ -1246,7 +1220,6 @@ def update_trial_data(
     min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
     run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral,
     run_mean_force, run_rfd, rfd_window_ms,
-    rfd_baseline_left, rfd_baseline_right,
     run_pmrt, run_emg_rms,
     emg_min_duration_ms, emg_h_onset, emg_h_offset
 ):
@@ -1357,7 +1330,6 @@ def update_trial_data(
             base_metrics['baseline_sd']   = baseline_results['sd']
             if base_metrics['threshold'] is not None:
                 base_metrics['threshold']     = base_metrics['threshold'] + base_metrics['baseline_mean'] # Adjust threshold relative to baseline
-            print(f"Baseline force: {base_metrics['baseline_mean']}, SD: {base_metrics['baseline_sd']}")
             
             # Find onset time (needed for MRT, FTI, Mean Force, RFD)
             if run_motor_reaction_time or run_force_time_integral or run_mean_force or run_rfd:
@@ -1396,7 +1368,7 @@ def update_trial_data(
 
         if run_motor_reaction_time:
             base_metrics['motor_reaction_time'] = fa.motor_reaction_time(
-                stim_time=base_metrics.get('stim_time'), 
+                stim_time=base_metrics.get('stim_time'),
                 onset_time=base_metrics.get('force_onset_time')
             )
         
@@ -1439,7 +1411,7 @@ def update_trial_data(
                 base_metrics.update(mean_force_metrics)
         
         if run_rfd:
-            if all(k in base_metrics for k in ['force_onset_time', 'peak_time', 'baseline_force']):
+            if all(k in base_metrics for k in ['force_onset_time', 'peak_time', 'baseline_mean']):
                 rfd_metrics = fa.calculate_rfd(
                     signal_df=analysis_df,
                     onset_time=base_metrics['force_onset_time'],
@@ -1451,12 +1423,10 @@ def update_trial_data(
                 base_metrics.update(rfd_metrics)
                 
                 # Perform normalization for RFD
-                rfd_baseline = rfd_baseline_right if base_metrics.get('response_hand') == 'right' else rfd_baseline_left
-                if rfd_baseline and rfd_baseline > 0:
-                    if 'early_rfd' in base_metrics and base_metrics['early_rfd'] is not None:
-                        base_metrics['early_rfd_pct'] = (base_metrics['early_rfd'] / rfd_baseline) * 100
-                    if 'peak_rfd' in base_metrics and base_metrics['peak_rfd'] is not None:
-                        base_metrics['peak_rfd_pct'] = (base_metrics['peak_rfd'] / rfd_baseline) * 100
+                if 'early_rfd' in base_metrics and base_metrics['early_rfd'] is not None:
+                    base_metrics['early_rfd_pct'] = (base_metrics['early_rfd'] / mvc_val) * 100
+                if 'peak_rfd' in base_metrics and base_metrics['peak_rfd'] is not None:
+                    base_metrics['peak_rfd_pct'] = (base_metrics['peak_rfd'] / mvc_val) * 100
 
         # EMG Analysis Section
         # ---------------------
@@ -1532,7 +1502,7 @@ def update_trial_data(
                     base_metrics['emg_rms'] = None
 
             except Exception as e:
-                print(f"⚠️ TKEO EMG detection error: {e}")
+                #print(f"⚠️ TKEO EMG detection error: {e}")
                 base_metrics['emg_onset_time'] = None
                 base_metrics['emg_offset_time'] = None
                 base_metrics['premotor_reaction_time'] = None
@@ -1863,7 +1833,7 @@ def handle_bulk_metrics_download(
     # Save to CSV
     final_df = pd.DataFrame(all_final_metrics)
     
-    print(f"✅ Bulk Export Complete: {len(final_df)} trials analyzed.")
+    #print(f"✅ Bulk Export Complete: {len(final_df)} trials analyzed.")
     
     return dcc.send_data_frame(
         final_df.to_csv, 

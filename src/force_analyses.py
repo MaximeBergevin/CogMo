@@ -151,7 +151,7 @@ def calculate_rfd(
     force_corrected = contraction_df[force_col] - baseline_force
     time_seconds = contraction_df['time']
 
-    # --- 1. Calculate Early RFD (Unchanged) ---
+    # --- 1. Calculate Early RFD ---
     early_rfd = None
     early_rfd_window_s = early_rfd_window_ms / 1000.0
     end_time = onset_time + early_rfd_window_s
@@ -168,7 +168,6 @@ def calculate_rfd(
             early_rfd = (force_at_end - force_at_start) / delta_time
 
     # --- 2. Calculate Peak RFD (Late RFD) ---
-    #    This is the corrected 20ms sliding window logic, translated from your R code.
     
     force_array = force_corrected.to_numpy()
     time_array = time_seconds.to_numpy()
