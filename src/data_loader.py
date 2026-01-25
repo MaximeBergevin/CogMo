@@ -82,7 +82,9 @@ def load_signal(filepath: Path) -> tuple[pd.DataFrame, dict]:
             # 4. Generate numbering
             data_frame['block_number'] = data_frame['is_block_start'].fillna(False).cumsum()
             # Grouping by block ensures trial numbers reset to 1 at each new block
-            data_frame['trial_number'] = data_frame.groupby('block_number')['is_trial_start'].fillna(False).cumsum()
+            data_frame['is_block_start'] = data_frame['is_block_start'].fillna(False)
+            data_frame['is_trial_start'] = data_frame['is_trial_start'].fillna(False)
+            data_frame['trial_number'] = data_frame.groupby('block_number')['is_trial_start'].cumsum()
             
             # Clean up temporary processing column
             data_frame.drop(columns=['comment_base'], inplace=True)

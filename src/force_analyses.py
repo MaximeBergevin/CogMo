@@ -286,7 +286,7 @@ def find_contraction_offset(
         baseline_sd = baseline_df[force_col].std()
         
         # A baseline is stable if its SD is low AND its mean is low relative to the peak
-        if baseline_sd <= 0.05 and baseline_mean <= relative_guard:
+        if baseline_sd <= 0.5 and baseline_mean <= relative_guard:
             threshold = baseline_mean + (3 * baseline_sd)
             break # Stable baseline found
 
@@ -353,7 +353,7 @@ def find_contraction_onset(
         baseline_sd = baseline_df[force_col].std()
         
         # Stability logic: Low SD and below the 20% peak guard
-        if baseline_sd <= 0.05 and baseline_mean <= relative_guard:
+        if baseline_sd <= 0.5 and baseline_mean <= relative_guard:
             threshold = baseline_mean + (3 * baseline_sd)
             break 
 
