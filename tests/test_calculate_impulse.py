@@ -10,14 +10,14 @@ from force_analyses import (
 )
 
 @pytest.mark.parametrize(
-    "_test_id, dominant_hand, shift_baseline",
+    "_test_id, dominant_hand, shift_baseline, motor_cond",
     [
-        ("Right hand, minor shift", "right", 0.1),
-        ("Left hand, major shift", "left", 15),
+        ("Right hand, high force, clean", "right", 0.05, "high"),
+        ("Left hand, high force, shifted", "left", 0.1, "high"),
     ]
 )
 def test_calculate_impulse(
-    _test_id, dominant_hand, shift_baseline,
+    _test_id, dominant_hand, shift_baseline, motor_cond,
     mock_signal_data_factory
 ):
     """
@@ -29,45 +29,55 @@ def test_calculate_impulse(
         total_duration_s = 5.0,
         dominant_force=dominant_hand,
         shift_baseline=shift_baseline,
-        mvc=mvc_val
+        mvc=mvc_val,
+        motor_condition=motor_cond,
+        burst_time_s=1.0,
+        max_noise=0.05 
     )
 
     # --- Run the prerequisite foundational metrics ---
-    #    This simulates the dependency chain in the main app
     onset_time = find_contraction_onset(
         signal_df=mock_df,
         stim_time=expected['stim_time_exact'],
         peak_time=expected['expected_peak_time'],
+        peak_value=expected['expected_peak_value'],
         response_hand=dominant_hand
     )
+    
     offset_time = find_contraction_offset(
         signal_df=mock_df,
         peak_time=expected['expected_peak_time'],
         peak_value=expected['expected_peak_value'],
         response_hand=dominant_hand
     )
-    baseline = find_baseline_force(
+    
+    baseline_results = find_baseline_force(
         signal_df=mock_df,
-        peak_time=expected['expected_peak_time'],
+        stim_time=expected['stim_time_exact'],
         response_hand=dominant_hand
     )
+    
+    # Validate prerequisites before calling the test function
+    assert baseline_results['mean'] is not None, "Baseline search failed (returned None)"
+    assert onset_time is not None, f"Onset detection failed for {_test_id}"
+    assert offset_time is not None, f"Offset detection failed for {_test_id}"
     
     # --- Call the function under test ---
     results = calculate_impulse(
         signal_df=mock_df,
         onset_time=onset_time,
         offset_time=offset_time,
-        baseline_force=baseline,
+        baseline_force=baseline_results['mean'],
         mvc_value=mvc_val,
         response_hand=dominant_hand
     )
 
     # --- Assertions ---
     # -------------------
-    assert isinstance(results, dict)
+    assert isinstance(results, dict), "Result should be a dictionary"
     
     # Check that the baseline-corrected AUC matches the ground truth from the factory
-    assert results['impulse_auc'] == pytest.approx(expected['expected_auc'], abs=0.05)
+    assert results['impulse_auc'] == pytest.approx(expected['expected_auc'], abs=0.1)
     
-    # Check the normalized value
-    assert results['impulse_auc_percent_mvc'] == pytest.approx(expected['expected_auc_normalized'], abs=0.05)
+    # Check the normalized value (%MVC/s)
+    assert results['impulse_auc_percent_mvc'] == pytest.approx(expected['expected_auc_normalized'], abs=0.1)

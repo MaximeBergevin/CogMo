@@ -10,7 +10,7 @@ from force_analyses import find_baseline_force
         ("Happy path: Low noise", 0.1, 0.0, True),
         ("Happy path: High noise", 0.9, 0.0, True),
         ("Happy path: Shifted baseline", 0.5, 5.0, True),
-        ("Bad path: Very high noise", 5.0, 0.0, False), # SD of noise will be > 1.0
+        ("Bad path: Very high noise", 5.0, 0.0, False), # SD of noise will be 5
     ]
 )
 def test_find_baseline_force(
@@ -29,21 +29,25 @@ def test_find_baseline_force(
         burst_time_s = 1.0 
     )
     
-    # Call the function under test
-    result_baseline = find_baseline_force(
+    result_dict = find_baseline_force(
         signal_df = mock_df,
-        peak_time = expected['expected_peak_time'],
+        stim_time = expected['stim_time_exact'],
         response_hand = "right"
     )
 
     # --- Assertions ---
     # -------------------
     if expected_is_valid:
-        # For happy paths, the result should be a number
-        assert isinstance(result_baseline, (float, np.floating))
-        # The calculated baseline mean should be very close to the shift we applied
-        assert result_baseline == pytest.approx(shift_baseline, abs=max_noise)
+        # Check dictionary structure
+        assert isinstance(result_dict, dict)
+        assert "mean" in result_dict
+        assert "sd" in result_dict
+        
+        # Check Mean: The calculated baseline mean should be very close
+        assert result_dict['mean'] == pytest.approx(shift_baseline, abs=max_noise)
+        
+        # Check SD: For happy paths, SD should be relatively low
+        assert result_dict['sd'] <= 1.0
     else:
-        # For the bad path, the function should fail to find a stable baseline
-        # and correctly return None
-        assert result_baseline is None
+        assert isinstance(result_dict, dict)
+        assert result_dict['sd'] > 1.0
