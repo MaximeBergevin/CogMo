@@ -61,6 +61,8 @@ def load_signal(filepath: Path) -> tuple[pd.DataFrame, dict]:
         # Inner helper to group markers (e.g., 'stim_left' -> 'stim')
         def get_comment_base(comment_str):
             """Removes direction suffixes to find the base name."""
+            if not isinstance(comment_str, str):
+                return ""
             base = re.sub(r'[-_\s]?(left|right|none|l|r|n)$', '', comment_str, flags=re.IGNORECASE)
             return base.strip()
 
