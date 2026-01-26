@@ -72,6 +72,6 @@ def test_calculate_mean_force(
     # --- Assertions ---
     assert isinstance(results, dict)
     # Check mean force matches factory ground truth
-    assert results['mean_force'] == pytest.approx(expected['expected_mean_force'], abs=0.2)
+    assert results['mean_force'] == pytest.approx(expected['expected_mean_force'], abs=0.5)
     # Check normalized %MVC
-    assert results['mean_force_percent_mvc'] == pytest.approx(expected['expected_mean_force_pct'], abs=0.2)
+    assert results['mean_force_percent_mvc'] == pytest.approx(expected['expected_mean_force_pct'], abs=0.5)

@@ -52,7 +52,8 @@ def load_signal(filepath: Path) -> tuple[pd.DataFrame, dict]:
     
     if 'comments' in data_frame.columns:
         # Standardize comments: handle missing/NaN values
-        data_frame['comments'] = data_frame['comments'].astype(str).replace(['<NA>', 'nan', 'None'], '')
+        data_frame['comments'] = data_frame['comments'].fillna('').astype(str)
+        data_frame['comments'] = data_frame['comments'].replace(['nan', 'None', '<NA>'], '')
 
         # 1. Populate summary with raw counts for UI visibility
         raw_counts = data_frame['comments'].value_counts().drop(labels=[''], errors='ignore')
