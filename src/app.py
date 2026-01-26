@@ -171,7 +171,7 @@ def create_trial_figure(
             fig.add_trace(go.Scatter(x=trial_segment_df[time_col], y=trial_segment_df[emg_l_col], name='EMG Left', showlegend=False, line=dict(width=0.5, color=COLOR_L)), row=2, col=1)
 
     # --- Subplot Axes Configuration ---
-    fig.update_yaxes(title_text="Force", range=[-1, max_mvc], row=1, col=1)
+    fig.update_yaxes(title_text="Force", range=[-(max_mvc*0.1), max_mvc], row=1, col=1)
     if include_emg:
         fig.update_yaxes(title_text="EMG", row=2, col=1)
 
@@ -504,7 +504,7 @@ app.layout = dbc.Container([
                         ], width=6, md=3),
                         dbc.Col([
                             dbc.Label("Min. Duration (ms)"),
-                            dbc.Input(id="emg-min-duration-input", type="number", value=10, step=1),
+                            dbc.Input(id="emg-min-duration-input", type="number", value=50, step=1),
                             dbc.Tooltip(
                                 "Minimal duration for a valid EMG burst.",
                                 target="emg-min-duration-input",
