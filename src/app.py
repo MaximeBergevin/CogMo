@@ -1338,7 +1338,8 @@ def update_trial_data(
                     stim_time=base_metrics['stim_time'],
                     peak_time=peak_time,
                     peak_value=base_metrics['peak_value'],
-                    response_hand=base_metrics['response_hand']
+                    response_hand=base_metrics['response_hand'],
+                    mvc_value=mvc_val,
                 )
                 base_metrics['force_onset_time'] = onset_time
 
@@ -1348,7 +1349,8 @@ def update_trial_data(
                     signal_df=analysis_df,
                     peak_time=peak_time,
                     peak_value=base_metrics['peak_value'],
-                    response_hand=base_metrics['response_hand']
+                    response_hand=base_metrics['response_hand'],
+                    mvc_value=mvc_val,
                 )
                 base_metrics['force_offset_time'] = offset_time
                 
