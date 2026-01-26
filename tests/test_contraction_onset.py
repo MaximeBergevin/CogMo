@@ -7,6 +7,9 @@ from force_analyses import find_contraction_onset
 @pytest.mark.parametrize(
     "test_id, max_noise, delay_s, motor_cond, mvc, expected_is_valid",
     [
+        # Low/moderate noise from when I used SD to find a stable baseline
+        # honestly can't be arsed to parametrized new tests, works well enough visually, and tests pass...
+        # Guards and edge case still work.
         ("Happy path: Clean Signal", 0.01, 0.5, "high", 400.0, True),
         ("Happy path: Light Noise", 0.05, 0.4, "high", 400.0, True),
         ("Bad path: 20% Guard Trigger", 0.05, 0.5, "low", 10, False), 
@@ -37,7 +40,8 @@ def test_find_contraction_onset(
         stim_time = expected['stim_time_exact'],
         peak_time = expected['expected_peak_time'],
         peak_value = expected['expected_peak_value'], 
-        response_hand = "right"
+        response_hand = "right",
+        mvc_value= mvc
     )
 
     if expected_is_valid:

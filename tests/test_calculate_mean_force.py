@@ -39,14 +39,16 @@ def test_calculate_mean_force(
         stim_time=expected['stim_time_exact'],
         peak_time=expected['expected_peak_time'],
         peak_value=expected['expected_peak_value'],
-        response_hand=dominant_hand
+        response_hand=dominant_hand,
+        mvc_value = mvc_val
     )
     
     offset_time = find_contraction_offset(
         signal_df=mock_df,
         peak_time=expected['expected_peak_time'],
         peak_value=expected['expected_peak_value'],
-        response_hand=dominant_hand
+        response_hand=dominant_hand,
+        mvc_value = mvc_val
     )
     
     baseline_res = find_baseline_force(
