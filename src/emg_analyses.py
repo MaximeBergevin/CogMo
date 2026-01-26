@@ -26,7 +26,6 @@ def _condition_tkeo(raw_signal: np.ndarray, fs: float, lp_cutoff: float = 50.0) 
     filtered = signal.filtfilt(b_band, a_band, raw_signal)
     
     # --- TKEO Operation ---
-    # The middle samples are calculated using their neighbors to detect energy shifts.
     tkeo_raw = filtered[1:-1]**2 - (filtered[:-2] * filtered[2:])
     
     # --- Rectification and Padding ---
@@ -35,8 +34,8 @@ def _condition_tkeo(raw_signal: np.ndarray, fs: float, lp_cutoff: float = 50.0) 
     tkeo_env = np.pad(tkeo_rect, (1, 1), mode='edge')
     
     # --- Smoothing (Envelope Generation) ---
-    # A lowpass filter creates a smooth curve used for threshold-based detection.
-    b_low, a_low = signal.butter(1, lp_cutoff/nyq, btype='low')
+    safe_lp = min(lp_cutoff, nyq * 0.95)  # Ensure cutoff is below Nyquist
+    b_low, a_low = signal.butter(1, safe_lp/nyq, btype='low')
     tkeo_env = signal.filtfilt(b_low, a_low, tkeo_env)
     
     return tkeo_env
