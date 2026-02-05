@@ -708,13 +708,13 @@ def upload_signal_data_callback(signal_contents, signal_filename):
                             stimulus_comments.append(comment_type)
 
             # TODO: Comment out for deployment, this is for debugging/testing purposes
-            #print(f"Data's head:\n {df.head()}")
-            #print(f"Session ID: {session_id}")
-            #print(f"Comment's count: {comment_summary}")
-            #print(f"Block comments: {block_comments}")
-            #print(f"Stimulus comments: {stimulus_comments}")
-            #print(f"Total rows tagged as True for block start: {df['is_block_start'].sum()}")
-            #print(message)
+            print(f"Data's head:\n {df.head()}")
+            print(f"Session ID: {session_id}")
+            print(f"Comment's count: {comment_summary}")
+            print(f"Block comments: {block_comments}")
+            print(f"Stimulus comments: {stimulus_comments}")
+            print(f"Total rows tagged as True for block start: {df['is_block_start'].sum()}")
+            print(message)
 
             return session_id, block_comments, stimulus_comments, message,  SUCCESS_UPLOAD_STYLE
         else:
@@ -1227,7 +1227,7 @@ def update_trial_data(
     This is the main "controller" callback for the Trial Viewer.
     It runs the full, robust analysis pipeline when the selected trial changes.
     """
-    if not all([session_id, channel_map, trial_lookup_dict, selected_block, selected_trial]):
+    if not all([mvc_left, mvc_right, session_id, channel_map, trial_lookup_dict, selected_block, selected_trial]):
         raise PreventUpdate
 
     #  Initial Data Loading
