@@ -187,12 +187,18 @@ def _process_text_file(lines: list[str], file_extension: str) -> pd.DataFrame:
 
             # Check if it's a number
             try:
-                # If number, keep in data list
                 float(clean_f)
                 numeric_fields.append(clean_f)
             except ValueError:
-                # If not a number, it's a comment
-                text_fields.append(f.strip())
+                # If it's not a number, check if it's a number STUCK to a comment
+                if '#' in clean_f:
+                    num_part, comment_part = clean_f.split('#', 1)
+                    if num_part.strip():
+                        numeric_fields.append(num_part.strip())
+                    text_fields.append('#' + comment_part.strip())
+                else:
+                    # It's just a regular text comment
+                    text_fields.append(f.strip())
 
         comment_part = " | ".join(text_fields) if text_fields else None
 
