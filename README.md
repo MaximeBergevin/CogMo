@@ -36,4 +36,5 @@ While typical experimental software (e.g., SuperLab, E-prime, PsychoPy) provides
 **Motor control**: Derive measures such as overshoot or undershoot relative to target thresholds.
 
 **Neurophysiological Insights**: Upload EMG traces to calculate EMG RMS for each burst and pre-motor reaction time.
+
 ![CogMo Analysis Overview](fig/CogMo-fig_analyses.png)
