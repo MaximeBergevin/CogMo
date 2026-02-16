@@ -5,36 +5,12 @@ CogMo is a specialized tool for batch processing and visualizing force data expo
 Several key metrics are measured from force traces (e.g., peak force, rate of force development, response latency) and electromyography (EMG) traces (root mean square, pre-motor response latency). It is designed to save time during data processing after data acquisition. Although developed with data from the upper limbs (specifically, handgrip and wrist flexion/extension), the app can be used with any muscle group as long as the paradigm is correctly applied.
 
 ## Task description
-The CogMo paradigm is designed to independently manipulate motor and cognitive workloads. In a typical setup, participants are seated at a computer screen and respond to visual stimuli (arrows) by contracting muscles.
+The CogMo paradigm is designed to independently manipulate motor and cognitive workloads. Below is an image example of the task. Note that while the motor demand **must** be manipulated via contraction intensity, cognitive demand can be manipulated in a number of ways. As such, the arrow task is an example. Similarly, the paradigm may be used with various muscle group and is not restricted to a prehension task.
 
-1. **Manipulation of Motor Demand**
+<img src="fig/CogMo-fig_task.png" width="600">
 
-Motor demand is manipulated via the intensity of the contraction required for a response to be validated.
+### **Why use the CogMo toolkit?**
+Obviously, this paradigm provides behavioural data that can be collected with any experimental software (e.g., SuperLab, E-Prime, PsychoPy). This app allows you to access more behavioural data by directly processing the force trace. For instance, a typical experimental software would only provide accuracy and reaction time. With the force traces, it is possible to dissociate reaction time (when the force begins to rise) from the response time (when the response is validated). It is also possible to derive other interesting measures, like whether participants over- or undershoot the threshold in specific conditions. In addition, you can choose to upload EMG traces alongside the force traces for additional processing and gain more insights into the neurophysiological systems during the paradigm. Currently, only EMG RMS for each contraction burst, as well as the pre-motor reaction time, are available. See figure below.
 
-MVC Scaling: In the initial validation work (Bergevin et al., in progress), 5% and 30% of the Maximum Voluntary Contraction (MVC) were used to distinguish low from high motor demand.
+<img src="fig/CogMo-fig_analyses.png" width="900">
 
-Note: The app works specifically with percentages of the MVC; this strategy must be used for the automated metrics to calculate correctly.
-
-2. **Manipulation of Cognitive Demand**
-
-*Note: These are examples of cognitive manipulation. In practice, you could choose the manipulation of your choosing*
-
-Cognitive demand is manipulated via the complexity of the instruction and stimulus location:
-
-Low Demand: Arrows always appear in the center; participants identify the direction.
-
-Moderate Demand: Arrows appear in the center. White arrows require a natural response (direction of arrow), while `#FFC0CB` pink arrows require an unnatural response (opposite direction).
-
-High Demand: Arrows appear on the sides of the screen. Participants must process both the location and the colour (natural vs. unnatural response).
-
-3. **Why use the CogMo tool?**
-
-While typical experimental software (e.g., SuperLab, E-prime, PsychoPy) provides basic accuracy and reaction time, CogMo allows you to dive deeper into the force trace to extract further behavioral and neurophysiological data:
-
-**Dissociated Timing**: Separate reaction time (initial force rise) from response time (crossing the validation threshold).
-
-**Motor control**: Derive measures such as overshoot or undershoot relative to target thresholds.
-
-**Neurophysiological Insights**: Upload EMG traces to calculate EMG RMS for each burst and pre-motor reaction time.
-
-![CogMo Analysis Overview](fig/CogMo-fig_analyses.png)
