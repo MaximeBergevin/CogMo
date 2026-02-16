@@ -5,9 +5,33 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.signal import butter, filtfilt
 
 
-
+def generate_band_limited_emg(fs: int, n_samples: int, snr_db: float, freq_range=(80, 120)) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generates background noise and a band-limited stochastic process for sEMG.
+    """
+    # Background Noise (Gaussian, zero mean, low variance)
+    sigma_noise = 0.01 
+    noise = np.random.normal(0, sigma_noise, n_samples)
+    
+    # Muscle Activity (Band-limited stochastic process)
+    raw_samples = np.random.normal(0, 1, n_samples)
+    nyq = 0.5 * fs
+    # Guard against Nyquist frequency for different sampling rates
+    low_cut = min(freq_range[0], nyq * 0.8)
+    high_cut = min(freq_range[1], nyq * 0.9)
+    
+    b, a = butter(4, [low_cut / nyq, high_cut / nyq], btype='band')
+    emg_stochastic = filtfilt(b, a, raw_samples)
+    
+    # Scale for SNR: sigma_signal = sqrt(noise_var * 10^(SNR/10))
+    sigma_signal = np.sqrt((sigma_noise**2) * (10**(snr_db / 10)))
+    if np.std(emg_stochastic) > 0:
+        emg_stochastic = (emg_stochastic / np.std(emg_stochastic)) * sigma_signal
+    
+    return noise, emg_stochastic
 
 def create_mock_condition_data(
         participant_id: str = "p01_test",
@@ -129,110 +153,100 @@ def create_mock_signal_data(
     shift_baseline: float = 0.0,
     delay_s: float = 0.5,
     burst_time_s: float = 0.2,
-    early_rfd_window_ms: int = 50
+    snr_db: float = 15.0,
+    emd_s: float = 0.05 
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
-    Generates a DataFrame simulating a segment of force_data for testing.
-    Also calculates and returns the "ground truth" metrics for the generated data.
+    Simulates force data and band-limited sEMG with Electromechanical Delay.
     """
-    # Time vector
-    # ------------
     time_increment = 1 / sampling_rate_hz
-    # Corrected bug: Was multiplication, should be division
     n_time_points = int(total_duration_s / time_increment) + 1
     time_points = np.linspace(0, total_duration_s, n_time_points)
 
-    # Base DataFrame with noise
-    # --------------------------
-    data = {
+    # Base DataFrame
+    df = pd.DataFrame({
         "time": time_points,
         force_r_col_name: np.random.uniform(-max_noise, max_noise, n_time_points),
         force_l_col_name: np.random.uniform(-max_noise, max_noise, n_time_points),
         "is_trial_start": False,
         "block_number": block_num_of_segment,
-        "trial_number": np.nan,
-        "expected_response": None
-    }
-    df = pd.DataFrame(data)
+        "trial_number": trial_num_at_stim,
+        "expected_response": expected_resp_at_stim
+    })
 
-    if include_emg:
-        df[emg_r_col_name] = np.random.uniform(0, 5, n_time_points)
-        df[emg_l_col_name] = np.random.uniform(0, 4, n_time_points)
-
-    #  Trial & Stimulus Info
-    # -----------------------
+    # Timing logic for Force Burst
     stim_row_index = (df['time'] - stim_time_within_segment).abs().idxmin()
     df.loc[stim_row_index, 'is_trial_start'] = True
-    df.loc[stim_row_index, 'trial_number'] = trial_num_at_stim
-    df.loc[stim_row_index, 'expected_response'] = expected_resp_at_stim # Added missing logic
     stim_time_exact = df.loc[stim_row_index, 'time']
 
-    # Force burst generation
-    # -----------------------
-    delay_in_points = int(delay_s / time_increment)
-    onset_index = min(stim_row_index + delay_in_points, n_time_points - 1)
+    onset_index = min(stim_row_index + int(delay_s / time_increment), n_time_points - 1)
     burst_in_points = int(burst_time_s / time_increment)
     end_index = min(onset_index + burst_in_points, n_time_points - 1)
-    burst_indices = np.arange(onset_index, end_index + 1)
+    force_burst_indices = np.arange(onset_index, end_index + 1)
 
-    # Determine threshold and peak force magnitude
+    # sEMG Generation (Stochastic Band-limited Model with EMD)
+    if include_emg:
+        # EMG burst starts earlier than force by the EMD value
+        emd_points = int(emd_s / time_increment)
+        emg_burst_indices = np.maximum(0, force_burst_indices - emd_points)
+
+        for col in [emg_r_col_name, emg_l_col_name]:
+            noise, emg_stochastic = generate_band_limited_emg(sampling_rate_hz, n_time_points, snr_db)
+            
+            if (col == emg_r_col_name and dominant_force == "right") or \
+               (col == emg_l_col_name and dominant_force == "left"):
+                noise[emg_burst_indices] += emg_stochastic[emg_burst_indices]
+            
+            df[col] = np.abs(noise) 
+
+    # 4. Force Burst (triangular)
     if motor_condition == "low":
         threshold = 0.05 * mvc
         peak_force_magnitude = mvc * 0.20 if overshoot else mvc * 0.03
-    elif motor_condition == "high":
+    else:
         threshold = 0.30 * mvc
         peak_force_magnitude = mvc * 0.50 if overshoot else mvc * 0.25
-    else:
-        raise ValueError("Invalid motor_condition. Use 'low' or 'high'.")
     
-    # Create triangular burst shape
-    n_points = len(burst_indices)
+    n_points = len(force_burst_indices)
     burst_vals = np.array([])
-    if n_points > 0:
+    if n_points > 1:
         half = int(np.ceil(n_points / 2))
         ramp_up = np.linspace(0, peak_force_magnitude, half)
         ramp_down = np.linspace(peak_force_magnitude, 0, n_points - half)
         burst_vals = np.concatenate([ramp_up, ramp_down])
 
-    # Inject the burst into the dominant hand's data
-    if dominant_force in ["right", "left"]:
         dominant_col = force_r_col_name if dominant_force == "right" else force_l_col_name
-        df.loc[burst_indices, dominant_col] = burst_vals
+        df.loc[force_burst_indices, dominant_col] = burst_vals
         df[dominant_col] += shift_baseline
 
-    # Calculate ground truth for AUC
-    expected_auc = 0
-    expected_auc_normalized = 0
+    # Calculate Metrics
+    expected_auc = 0.0
+    expected_auc_normalized = 0.0
     if len(burst_vals) > 1:
+        # Ground truth AUC of the clean triangular burst
         expected_auc = np.trapezoid(y=burst_vals, dx=time_increment)
-        contraction_duration = burst_time_s
-        if mvc > 0 and contraction_duration > 0:
-            expected_auc_normalized = (expected_auc / contraction_duration) / mvc * 100
+        
+        # Ground truth Normalized AUC (%MVC/s)
+        # Formula: (AUC / Duration) / MVC * 100
+        if mvc > 0 and burst_time_s > 0:
+            expected_auc_normalized = (expected_auc / burst_time_s) / mvc * 100
 
-    # Calculate ground truth for mean force
-    expected_mean_force = 0.0
-    if n_points > 0:
-        expected_mean_force = np.mean(burst_vals)
+    expected_mean_force = np.mean(burst_vals) if n_points > 0 else 0.0
     
-    expected_mean_force_pct = 0.0
-    if mvc > 0:
-        expected_mean_force_pct = (expected_mean_force / mvc) * 100
-
-
-    # Calculate 'ground truth' metrics for testing
-    # ---------------------------------------------
     expected_metrics = {
         "stim_row_index": stim_row_index,
         "stim_time_exact": stim_time_exact,
         "expected_peak_value": peak_force_magnitude,
         "expected_onset_time": df.loc[onset_index, 'time'] if onset_index < n_time_points else np.nan,
+        "expected_force_onset": df.loc[onset_index, 'time'] if onset_index < n_time_points else np.nan, 
         "expected_peak_time": df.loc[onset_index + half - 1, 'time'] if n_points > 0 else np.nan,
         "expected_offset_time": df.loc[end_index, 'time'] if end_index < n_time_points else np.nan,
+        "expected_emg_onset": df.loc[emg_burst_indices[0], 'time'] if include_emg else np.nan,
         "expected_threshold": threshold,
         "expected_auc": expected_auc,
         "expected_auc_normalized": expected_auc_normalized,
-        "expected_mean_force" : expected_mean_force,
-        "expected_mean_force_pct": expected_mean_force_pct
+        "expected_mean_force": expected_mean_force,
+        "expected_mean_force_pct": (expected_mean_force / mvc) * 100 if mvc > 0 else 0
     }
 
     return df, expected_metrics

@@ -151,7 +151,7 @@ def calculate_rfd(
     force_corrected = contraction_df[force_col] - baseline_force
     time_seconds = contraction_df['time']
 
-    # --- 1. Calculate Early RFD (Unchanged) ---
+    # --- 1. Calculate Early RFD ---
     early_rfd = None
     early_rfd_window_s = early_rfd_window_ms / 1000.0
     end_time = onset_time + early_rfd_window_s
@@ -168,7 +168,6 @@ def calculate_rfd(
             early_rfd = (force_at_end - force_at_start) / delta_time
 
     # --- 2. Calculate Peak RFD (Late RFD) ---
-    #    This is the corrected 20ms sliding window logic, translated from your R code.
     
     force_array = force_corrected.to_numpy()
     time_array = time_seconds.to_numpy()
@@ -205,59 +204,44 @@ def calculate_rfd(
 
 def find_baseline_force(
     signal_df: pd.DataFrame,
-    peak_time: float,
+    stim_time: float,
     response_hand: str
-) -> Optional[float]:
+) -> Dict[str, Optional[float]]:
     """
-    Identifies a stable pre-contraction baseline via iterative window searching.
-    
-    The algorithm searches 50ms windows before the peak. If the standard deviation 
-    is high (> 1.0), it shifts the window to avoid signal drift or early onset 
-    interference until a stable mean is found.
+    Identifies the most stable pre-contraction window and returns 
+    both the mean (baseline) and its specific standard deviation (noise).
     """
     force_col = f"force_{response_hand}"
+    
+    # Define a fixed search zone: From 800ms before stim to 100ms before stim
+    # (Adjusted based on your previous 'out of bounds' fix)
+    search_start = stim_time
+    search_end = stim_time + 0.500
+    
+    window_size = 0.050
+    current_start = search_start
+    
+    best_mean = None
+    best_sd = None
+    lowest_sd = float('inf')
 
-    # Initialize 50 ms window starting 250ms before the peak
-    baseline_start = peak_time - 0.250
-    baseline_end = baseline_start + 0.050
-    shift_s = 0.050  # 50 ms
-    max_iter = 10
-
-    for _ in range(max_iter):
-        # Ensure the window does not go before the start of the signal
-        if baseline_start < signal_df['time'].min():
-            break
-
-        baseline_df = signal_df[
-            (signal_df['time'] >= baseline_start) & (signal_df['time'] < baseline_end)
+    while current_start + window_size <= search_end:
+        window_df = signal_df[
+            (signal_df['time'] >= current_start) & 
+            (signal_df['time'] < current_start + window_size)
         ]
-
-        if len(baseline_df) < 2: # Need at least 2 points for std dev
-            break
-
-        baseline_sd = baseline_df[force_col].std()
-
-        if baseline_sd <= 1.0:
-            # Stable baseline found, return its mean
-            return baseline_df[force_col].mean()
-
-        # Check for drift and shift the window in the opposite direction
-        half_idx = len(baseline_df) // 2
-        early_mean = baseline_df[force_col].iloc[:half_idx].mean()
-        late_mean = baseline_df[force_col].iloc[half_idx:].mean()
-
-        if late_mean > early_mean:
-            # Drift is upward, so the contraction might be starting. Shift earlier.
-            baseline_start -= shift_s
-            baseline_end -= shift_s
-        else:
-            # Drift is downward or stable. Shift later to get closer to onset.
-            baseline_start += shift_s
-            baseline_end += shift_s
+        
+        if len(window_df) >= 2:
+            current_sd = window_df[force_col].std()
             
-    # If the loop finishes without finding a stable baseline
-    return None
-
+            if current_sd < lowest_sd:
+                lowest_sd = current_sd
+                best_sd = current_sd
+                best_mean = window_df[force_col].mean()
+        
+        current_start += 0.025 
+        
+    return {'mean': best_mean, 'sd': best_sd}
 
 
 def find_contraction_offset(
@@ -280,8 +264,8 @@ def find_contraction_offset(
     # --- Iteratively search for a stable post-peak baseline window ---
     baseline_start = peak_time + 0.150
     baseline_end = baseline_start + 0.050
-    shift_s = 0.050  # 50 ms
-    max_iter = 10
+    shift_s = 0.10 
+    max_iter = 50
     threshold = None
 
     for _ in range(max_iter):
@@ -302,7 +286,7 @@ def find_contraction_offset(
         baseline_sd = baseline_df[force_col].std()
         
         # A baseline is stable if its SD is low AND its mean is low relative to the peak
-        if baseline_sd <= 1.0 and baseline_mean <= relative_guard:
+        if baseline_sd <= 0.5 and baseline_mean <= relative_guard:
             threshold = baseline_mean + (3 * baseline_sd)
             break # Stable baseline found
 
@@ -326,69 +310,183 @@ def find_contraction_offset(
     return offset_time
 
 
-def find_contraction_onset(
+def find_contraction_offset(
     signal_df: pd.DataFrame,
-    stim_time: float,
     peak_time: float,
-    response_hand: str
+    peak_value: float,
+    response_hand: str,
+    mvc_value: float
 ) -> Optional[float]:
     """
-    Identifies the start of the force contraction (onset).
+    Identifies the end of the force contraction (offset).
     
-    Logic follows the same iterative thresholding as offset detection, but 
-    scans backward from the peak to find the last point where force was at baseline.
+    Finds a stable post-peak baseline and sets a threshold (Mean + 3*SD). The 
+    offset is the first point after the peak where force returns below this threshold.
     """
     force_col = f"force_{response_hand}"
+
+    # Guard condition to avoid issues if peak force is very low
+    relative_guard = 0.20 * abs(peak_value)
     
-    # Iteratively search for a stable baseline window
-    baseline_start = peak_time - 0.250
+    # --- Iteratively search for a stable post-peak baseline window ---
+    baseline_start = peak_time + 0.150
     baseline_end = baseline_start + 0.050
-    shift_s = 0.050  # 50 ms
-    max_iter = 10
+    shift_s = 0.10 
+    max_iter = 50
     threshold = None
 
+    # Track the flattest window found so far
+    best_delta = float('inf')
+
+    # --- Dynamic Scaling Parameters ---
+    # Dead-zone: 0.5% of MVC. Below this: consider the window 'perfectly flat'
+    dz_threshold = mvc_value * 0.005 
+    # SD Floor: 0.1% of MVC. Prevents threshold from falling into microscopic noise
+    sd_floor = mvc_value * 0.001
+
     for _ in range(max_iter):
+        if baseline_start > signal_df['time'].max():
+            break # Stop if we run out of data
 
         baseline_df = signal_df[
             (signal_df['time'] >= baseline_start) & (signal_df['time'] < baseline_end)
         ]
         
-        if baseline_df.empty:
-            break
-
-        baseline_sd = baseline_df[force_col].std()
-        
-        if baseline_sd <= 1.0:
-            baseline_mean = baseline_df[force_col].mean()
-            threshold = baseline_mean + (3 * baseline_sd)
-            break # Stable baseline found
-        
-        # Shift the window based on drift direction
-        half_idx = len(baseline_df) // 2
-        early_mean = baseline_df[force_col].iloc[:half_idx].mean()
-        late_mean = baseline_df[force_col].iloc[half_idx:].mean()
-        
-        if late_mean > early_mean:
-            baseline_start -= shift_s
-            baseline_end -= shift_s
-        else:
+        if baseline_df.empty or len(baseline_df) < 2:
+            # Shift window forward and continue to the next iteration
             baseline_start += shift_s
             baseline_end += shift_s
+            continue
 
-    if threshold is None:
-        return None # No stable baseline was found
+        baseline_mean = baseline_df[force_col].mean()
+        baseline_sd = baseline_df[force_col].std()
+        
+        # Calculate slope/delta (End - Start) to find 'flatness'
+        raw_delta = abs(baseline_df[force_col].iloc[-1] - baseline_df[force_col].iloc[0])
 
-    # Scan backward from the peak to find the last point at or below the threshold
-    onset_window_df = signal_df[
-        (signal_df['time'] >= stim_time) & (signal_df['time'] <= peak_time)
-    ]
-    onset_candidates = onset_window_df[onset_window_df[force_col] <= threshold]
+        # --- Dead-zone Logic ---
+        # Treat changes less than MVC-scaled threshold as perfectly flat
+        current_delta = 0.0 if raw_delta < dz_threshold else raw_delta
+
+        if baseline_mean <= relative_guard:
+            # Pick the flattest candidate
+            if current_delta <= best_delta:
+                best_delta = current_delta
+                
+                safe_sd = max(baseline_sd, sd_floor)
+                threshold = baseline_mean + (3 * safe_sd)
+                
+                if current_delta == 0.0:
+                    break # Stable baseline found
+
+        baseline_start += shift_s
+        baseline_end += shift_s
     
-    if onset_candidates.empty:
+    if threshold is None:
+        return None # No stable post-peak baseline was found
+
+    # --- Find the first time point after the peak that drops below the threshold ---
+    offset_window_df = signal_df[signal_df['time'] >= peak_time]
+    offset_candidates = offset_window_df[offset_window_df[force_col] <= threshold]
+    
+    if offset_candidates.empty:
         return None
 
-    return onset_candidates['time'].max()
+    # Return the time of the first occurrence
+    offset_time = offset_candidates['time'].iloc[0]
 
+    return offset_time
+
+
+def find_contraction_onset(
+    signal_df: pd.DataFrame,
+    stim_time: float,
+    peak_time: float,
+    peak_value: float,
+    response_hand: str,
+    mvc_value: float,
+) -> Optional[float]:
+    """
+    Identifies the onset by scanning backward from the peak.
+    Iteratively searches for a stable baseline before the contraction 
+    to establish a 3SD threshold.
+    """
+    force_col = f"force_{response_hand}"
+
+    # Guard: Baseline must be < 20% of peak to avoid the contraction ramp
+    relative_guard = 0.20 * abs(peak_value)
+    
+    # --- Iterative search moving BACKWARD from peak ---
+    # Start the search window just before the peak ramp
+    baseline_end = peak_time - 0.050 
+    baseline_start = baseline_end - 0.025
+    shift_s = 0.010 
+    max_iter = 50
+    threshold = None
+
+    # Track the flattest window found so far
+    best_delta = float('inf')
+
+    # --- Dynamic Scaling Parameters ---
+    # Dead-zone: 0.5% of MVC. Below this: we consider the window perfectly flat
+    dz_threshold = mvc_value * 0.005 
+    # SD Floor: 0.1% of MVC. Prevents threshold from falling into microscopic noise
+    sd_floor = mvc_value * 0.001
+
+    for _ in range(max_iter):
+        # Don't search before the stimulus/recording start
+        if baseline_start < signal_df['time'].min():
+            break
+
+        baseline_df = signal_df[
+            (signal_df['time'] >= baseline_start) & (signal_df['time'] < baseline_end)
+        ]
+        
+        if baseline_df.empty or len(baseline_df) < 2:
+            baseline_start -= shift_s
+            baseline_end -= shift_s
+            continue
+
+        baseline_mean = baseline_df[force_col].mean()
+        baseline_sd = baseline_df[force_col].std()
+        
+        # Calculate slope/delta (End - Start) to find flatness
+        raw_delta = abs(baseline_df[force_col].iloc[-1] - baseline_df[force_col].iloc[0])
+
+        # --- Dead-zone Logic ---
+        # Treat changes less than MVC-scaled threshold as perfectly flat to ignore drift/noise
+        current_delta = 0.0 if raw_delta < dz_threshold else raw_delta
+
+        # Stability logic: Pick the flattest window below the 20% peak guard
+        if baseline_mean <= relative_guard:
+            if current_delta <= best_delta:
+                best_delta = current_delta
+                
+                # Use a safety floor for SD to prevent hyper-sensitivity
+                safe_sd = max(baseline_sd, sd_floor)
+                
+                threshold = baseline_mean + (3 * safe_sd)
+                
+                if current_delta == 0.0:
+                    break 
+
+        baseline_start -= shift_s
+        baseline_end -= shift_s
+    
+    if threshold is None:
+        return None 
+
+    # --- Scan backward from the peak to find the breakaway point ---
+    search_window = signal_df[
+        (signal_df['time'] >= stim_time) & (signal_df['time'] <= peak_time)
+    ]
+    
+    at_baseline = search_window[search_window[force_col] <= threshold]
+    
+    if at_baseline.empty:
+        return stim_time 
+
+    return at_baseline['time'].max()
 
 def find_main_contraction_peak(
     full_df: pd.DataFrame,
@@ -482,8 +580,8 @@ def find_main_contraction_peak(
     peak_value = target_peak['abs_force']
 
     # 4. Create Analysis Window
-    analysis_start = peak_time - 1.25
-    analysis_end = peak_time + 1.25
+    analysis_start = stim_time - 0.5
+    analysis_end = stim_time + 2.0
     analysis_df = full_df[(full_df['time'] >= analysis_start) & (full_df['time'] <= analysis_end)]
 
     return {

@@ -26,7 +26,6 @@ def _condition_tkeo(raw_signal: np.ndarray, fs: float, lp_cutoff: float = 50.0) 
     filtered = signal.filtfilt(b_band, a_band, raw_signal)
     
     # --- TKEO Operation ---
-    # The middle samples are calculated using their neighbors to detect energy shifts.
     tkeo_raw = filtered[1:-1]**2 - (filtered[:-2] * filtered[2:])
     
     # --- Rectification and Padding ---
@@ -35,8 +34,8 @@ def _condition_tkeo(raw_signal: np.ndarray, fs: float, lp_cutoff: float = 50.0) 
     tkeo_env = np.pad(tkeo_rect, (1, 1), mode='edge')
     
     # --- Smoothing (Envelope Generation) ---
-    # A lowpass filter creates a smooth curve used for threshold-based detection.
-    b_low, a_low = signal.butter(1, lp_cutoff/nyq, btype='low')
+    safe_lp = min(lp_cutoff, nyq * 0.95)  # Ensure cutoff is below Nyquist
+    b_low, a_low = signal.butter(1, safe_lp/nyq, btype='low')
     tkeo_env = signal.filtfilt(b_low, a_low, tkeo_env)
     
     return tkeo_env
@@ -166,23 +165,21 @@ def find_emg_boundaries(
     # --- Offset Detection ---
     # Identifies the burst tail by checking for a 20ms window of stable low energy.
     above_off = (envelope > threshold_off).astype(int)
-    above_off = (envelope > threshold_off).astype(int)
     win_off = int(0.020 * fs)
+    min_burst_samples = int((min_burst_ms / 1000) * fs)
     
     final_offset_idx = force_off_idx # Default fallback
     
     # Iterate from force offset back toward the EMG onset
-    for i in range(force_off_idx, onset_idx + win_off, -1):
-        window = above_off[i - win_off : i]
-        # Burst is considered finished when 50% of the window is below threshold
-        if np.mean(window) >= 0.5:
-            final_offset_idx = i
-            break
+    for i in range(force_off_idx, onset_idx + min_burst_samples, -1):
+        # Check if the current point is actually 'active'
+        if above_off[i] == 1:
+            # Check if the activity preceding this point is sustained
+            sustained_window = above_off[i - min_burst_samples : i]
+            if np.mean(sustained_window) >= 0.7:
+                final_offset_idx = i
+                break
 
-    # --- Final Burst Validation ---
-    duration_ms = (time[final_offset_idx] - time[onset_idx]) * 1000
-    if duration_ms < min_burst_ms:
-        return None, None, threshold_on
 
     return time[onset_idx], time[final_offset_idx], threshold_on
 

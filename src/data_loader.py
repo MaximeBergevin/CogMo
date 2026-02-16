@@ -52,7 +52,8 @@ def load_signal(filepath: Path) -> tuple[pd.DataFrame, dict]:
     
     if 'comments' in data_frame.columns:
         # Standardize comments: handle missing/NaN values
-        data_frame['comments'] = data_frame['comments'].astype(str).replace(['<NA>', 'nan', 'None'], '')
+        data_frame['comments'] = data_frame['comments'].fillna('').astype(str)
+        data_frame['comments'] = data_frame['comments'].replace(['nan', 'None', '<NA>'], '')
 
         # 1. Populate summary with raw counts for UI visibility
         raw_counts = data_frame['comments'].value_counts().drop(labels=[''], errors='ignore')
@@ -61,6 +62,8 @@ def load_signal(filepath: Path) -> tuple[pd.DataFrame, dict]:
         # Inner helper to group markers (e.g., 'stim_left' -> 'stim')
         def get_comment_base(comment_str):
             """Removes direction suffixes to find the base name."""
+            if not isinstance(comment_str, str):
+                return ""
             base = re.sub(r'[-_\s]?(left|right|none|l|r|n)$', '', comment_str, flags=re.IGNORECASE)
             return base.strip()
 
@@ -80,7 +83,9 @@ def load_signal(filepath: Path) -> tuple[pd.DataFrame, dict]:
             # 4. Generate numbering
             data_frame['block_number'] = data_frame['is_block_start'].fillna(False).cumsum()
             # Grouping by block ensures trial numbers reset to 1 at each new block
-            data_frame['trial_number'] = data_frame.groupby('block_number')['is_trial_start'].fillna(False).cumsum()
+            data_frame['is_block_start'] = data_frame['is_block_start'].fillna(False)
+            data_frame['is_trial_start'] = data_frame['is_trial_start'].fillna(False)
+            data_frame['trial_number'] = data_frame.groupby('block_number')['is_trial_start'].cumsum()
             
             # Clean up temporary processing column
             data_frame.drop(columns=['comment_base'], inplace=True)
@@ -138,19 +143,31 @@ def _process_text_file(lines: list[str], file_extension: str) -> pd.DataFrame:
         num_data_cols = len(lines[data_start_index].strip().split(delimiter))
         channel_names = [f'col_{i+1}' for i in range(num_data_cols)]
     
-    # Fix common omission where the 'Time' column is present but not named in header
+    # Check for missing time column and add if necessary
     num_data_cols = len(lines[data_start_index].strip().split(delimiter))
     if len(channel_names) == num_data_cols - 1: # Softwares often omit naming the time column
         channel_names.insert(0, 'time')
         warnings.warn("Automatically added 'time' column to the header.")
 
     # --- 3. Parse Data and Embedded Comments ---
-    # Scientific formats often append comments using '#*' at the end of data rows.
     final_col_names = [name for name in channel_names if name]
     
-    # Check if a comments column should exist. The '#*' is the key here.
-    has_comments = any('#*' in line for line in lines[data_start_index:]) # Check if comment exists
-            
+    # Check if a column has a comment
+    has_comments = False
+    for line in lines[data_start_index:]:
+        fields = line.strip().split(delimiter)
+        for field in fields:
+            f_strip = field.strip().replace(',', '.')
+            if f_strip == "":
+                continue
+            try:
+                float(f_strip)
+            except (ValueError):
+            # Found something that isn't a number -> probably a comment
+                has_comments = True
+                break
+        if has_comments: break 
+
     if has_comments: 
         final_col_names.append('comments')
     
@@ -158,18 +175,35 @@ def _process_text_file(lines: list[str], file_extension: str) -> pd.DataFrame:
     final_num_cols = len(final_col_names) # Use to truncate/pad rows 
     
     for line in lines[data_start_index:]:
-        fields = line.strip().split(delimiter)
-        comment_part = None
-        
-        # Split the line into data and comments based on the '#*' delimiter
-        # TODO: Handle a more generic comment delimiter based on regex/non-numeric?
-        if '#*' in line:
-            parts = line.split('#*')
-            line = parts[0]
-            comment_part = parts[1].strip()
-            fields = line.strip().split(delimiter)
-        
-        # If comments were found, append them to the fields
+        # Split the line into data and comments
+        raw_fields = line.strip().split(delimiter)
+        numeric_fields = []
+        text_fields = []
+
+        for f in raw_fields:
+            clean_f = f.strip().replace(',', '.')
+            if clean_f == "":
+                continue
+
+            # Check if it's a number
+            try:
+                float(clean_f)
+                numeric_fields.append(clean_f)
+            except ValueError:
+                # If it's not a number, check if it's a number STUCK to a comment
+                if '#' in clean_f:
+                    num_part, comment_part = clean_f.split('#', 1)
+                    if num_part.strip():
+                        numeric_fields.append(num_part.strip())
+                    text_fields.append('#' + comment_part.strip())
+                else:
+                    # It's just a regular text comment
+                    text_fields.append(f.strip())
+
+        comment_part = " | ".join(text_fields) if text_fields else None
+
+        fields = numeric_fields
+
         if has_comments:
             fields.append(comment_part)
 
@@ -192,7 +226,7 @@ def _process_text_file(lines: list[str], file_extension: str) -> pd.DataFrame:
         if col == 'comments':
             df[col] = df[col].astype('string')
 
-    if 'time' in df.columns:
+    if 'time' in df.columns and len(df) > 1:
         # Detect sampling interval from the first couples rows
         dt = df['time'].iloc[1] - df['time'].iloc[0]
         df['time'] = df.index * dt

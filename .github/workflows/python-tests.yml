@@ -34,7 +34,7 @@ jobs:
           
       - name: Install and Compile Dependencies
         run: |
-          python -m pip install --upgrade pip setuptools wheel pip-tools
+          python -m pip install "pip<25.3" setuptools wheel pip-tools
           pip-compile requirements.in -o requirements_linux.txt
           pip install -r requirements_linux.txt
           pip install -e .

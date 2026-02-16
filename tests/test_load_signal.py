@@ -43,14 +43,14 @@ def test_load_signal(mock_file_factory):
     assert pd.api.types.is_bool_dtype(df['is_trial_start'])
     
     # 4. Check comment summary
-    assert comment_summary["block_start"] == 1
-    assert comment_summary["stimulus_right"] == 1
+    assert comment_summary["#*block_start"] == 1
+    assert comment_summary["#*stimulus_right"] == 1
     
     # 5. Check dimensions
     assert len(df) == 6
     
     # 6. Check specific values
-    assert df.loc[0, 'comments'] == "block_start"
+    assert df.loc[0, 'comments'] == "#*block_start"
     assert df.loc[0, 'is_block_start']
     assert df.loc[0, 'block_number'] == 1
 
