@@ -49,6 +49,9 @@ In practice, any keystrokes may be used. The following keys were used and are de
 > [!NOTE]
 > The **Hand** column refers to the correct physical response required by the participant, which triggers the specific keystroke emulated by the Arduino. During 30% MVC blocks, 5% MVC keys were ignored to prevent premature responses.
 
+Once the experimental software is responsive to the participants' responses, the experimenter should make sure that the behavioural (and potentially the physiological data) is synchronized with the task. To do so, the minimum requirements is to have a comment appear in the data acquisition software at the start of each block (below -- 'block_start') and at each stimulus presentation (below -- 'stim_[correct response]'). **Note that it is imperative that the correct response is embedded in the comment, as the app extracts this information on a trial-by-trial basis from it.**
+
+<img src="fig/CogMo-fig_channels-and-comments.png" width ="750">
 
 
 
