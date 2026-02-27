@@ -11,12 +11,15 @@ To get started, download the executable for your operating system. These package
 | Platform | Download Link |
 | :--- | :--- |
 | **Windows** | [![Download Windows](https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/MaximeBergevin/CogMo/releases/latest/download/CogMo_Toolkit-windows.exe) |
-| **macOS** | [![Download macOS](https://img.shields.io/badge/Download-macOS-FFB6C1?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/MaximeBergevin/CogMo/releases/latest/download/CogMo_Toolkit_macos) |
+| **macOS** | [![Download macOS](https://img.shields.io/badge/Download-macOS-FFB6C1?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/MaximeBergevin/CogMo/releases/latest/download/CogMo_Toolkit-macos.zip) |
 
 > [!IMPORTANT]
-> **macOS Users:** After downloading, you must remove the "quarantine" flag before the app will run. Open your terminal and run:
+> **macOS Users:** After downloading, you must remove the "quarantine" flag before the app will run. After decompressing the .zip file, open your terminal and run:
 > 
-> `cd ~/Downloads && xattr -rd com.apple.quarantine CogMo.app`
+> `cd ~/Downloads && xattr -rd com.apple.quarantine CogMo_Toolkit-macos`
+
+> [!NOTE]
+> Because the app uses a portable version of Python, it may take a moment to launch. This is normal. It is the cost to avoid having the user install their own copy of Python on their machine. This also avoids potential compatibility issues.
 
 ## Task description
 The CogMo paradigm is designed to independently manipulate motor and cognitive workloads. Below is an image example of the task. Note that while the motor demand **must** be manipulated via contraction intensity, cognitive demand can be manipulated in a number of ways. As such, the arrow task is an example. Similarly, the paradigm may be used with various muscle group and is not restricted to a prehension task.
