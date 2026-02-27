@@ -11,7 +11,7 @@ To get started, download the executable for your operating system. These package
 | Platform | Download Link |
 | :--- | :--- |
 | **Windows** | [![Download Windows](https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/MaximeBergevin/CogMo/releases/latest/download/CogMo_Toolkit-windows.exe) |
-| **macOS** | [![Download macOS](https://img.shields.io/badge/Download-macOS-FFB6C1?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/MaximeBergevin/CogMo/releases/latest/download/CogMo_Toolkit-macos.zip) |
+| **macOS** | [![Download macOS](https://img.shields.io/badge/Download-macOS-FFB6C1?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/MaximeBergevin/CogMo/releases/latest/download/CogMo_Toolkit_macos) |
 
 > [!IMPORTANT]
 > **macOS Users:** After downloading, you must remove the "quarantine" flag before the app will run. Open your terminal and run:
