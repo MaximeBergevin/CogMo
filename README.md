@@ -53,11 +53,22 @@ Once the experimental software is responsive to the participants' responses, the
 
 <img src="fig/CogMo-fig_channels-and-comments.png" width ="750">
 
+The app requires two files to function with the acquired data. The first file is the raw data from the data acquisition software. It is highly recommended to extract only the channels used—both the right and left force channels, and the EMG channels if desired. The time channel should be automatically exported by default. This should help reduce file size. Also, be sure that the software exports the comments along with it. Some software embeds the comments in the last column; others may embed them in the column of whichever channel they were assigned to. The app should automatically handle such cases, but be sure to test your setup in case you run into compatibility issues. It does not matter whether the metadata is exported; the app discards it because it is not used internally.
 
+Below the header of a mock data file (.txt). It contains 4 data columns (2 with force traces and 2 with EMG traces), the first column being time. As mentioned above, the metadata will be discarded when uploaded to the app. Comments are not shown, but they appear on the rows where stimuli were presented and at the start of blocks.
 
+<img src="fig/CogMo-fig_mock-data-header.png">
 
+The second required file is the blocks in which the participants performed them. It is highly recommended that the experimental software saves this order in its output. For the app to work, the order should be uploaded in long format (.csv or .xlsx), with one row per block. If your design contains 24 blocks, the file should then contain 24 rows, excluding the header. Below is an example with only 6 rows.
 
-
+| participant | cognitive | motor |
+| :--- | :--- | :--- |
+| 001 | moderate | low force |
+| 001 | moderate | high force |
+| 001 | moderate | low force |
+| 001 | hard | high force |
+| 001 | easy | low force |
+| 001 | hard | low force |
 
 
 
