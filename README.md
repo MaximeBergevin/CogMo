@@ -4,6 +4,20 @@ CogMo is a specialized tool for batch processing and visualizing force data expo
 
 Several key metrics are measured from force traces (e.g., peak force, rate of force development, response latency) and electromyography (EMG) traces (root mean square, pre-motor response latency). It is designed to save time during data processing after data acquisition. Although developed with data from the upper limbs (specifically, handgrip and wrist flexion/extension), the app can be used with any muscle group as long as the paradigm is correctly applied.
 
+## Download
+To get started, download the executable for your operating system. These packages include all necessary dependencies and do not require a Python installation.
+
+
+| Platform | Download Link |
+| :--- | :--- |
+| **Windows** | [![Download Windows](https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/MaximeBergevin/CogMo/releases/latest/download/CogMo_Toolkit-windows.exe) |
+| **macOS** | [![Download macOS](https://img.shields.io/badge/Download-macOS-FFB6C1?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/MaximeBergevin/CogMo/releases/latest/download/CogMo_Toolkit-macos.zip) |
+
+> [!IMPORTANT]
+> **macOS Users:** After downloading, you must remove the "quarantine" flag before the app will run. Open your terminal and run:
+> 
+> `cd ~/Downloads && xattr -rd com.apple.quarantine CogMo.app`
+
 ## Task description
 The CogMo paradigm is designed to independently manipulate motor and cognitive workloads. Below is an image example of the task. Note that while the motor demand **must** be manipulated via contraction intensity, cognitive demand can be manipulated in a number of ways. As such, the arrow task is an example. Similarly, the paradigm may be used with various muscle group and is not restricted to a prehension task.
 
