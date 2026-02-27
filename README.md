@@ -28,3 +28,33 @@ Obviously, this paradigm provides behavioural data that can be collected with an
 
 <img src="fig/CogMo-fig_analyses.png" width="900">
 
+## Experimental setup
+The app does not assume the use of specific hardware or software. However, the experimental setup must adhere to certain guidelines in order to use the CogMo Toolkit properly. Otherwise, the app may not be able to recognize your experimental design (e.g., how many blocks the experimental session contains) or be able to properly segment each trial. See below for details.
+
+### Data acquisition
+
+Data for the development phase were collected using a PowerLab 8/35 unit and LabChart 8 (ADInstruments, Colorado Springs, CO, USA). The task itself was run on PsychoPy version (x.x.x; Open Science Tools Ltd., Nottingham, United Kingdom). The handshake between the data acquisition software (i.e., LabChart 8) and the experimental software (i.e., PsychoPy) was done using a Arduino Leonardo (Arduino, Monza, Italy). Because PsychoPy is blind to the channels within LabChart 8 and thus to the force exerted on the grip force transducers, the Arduino emulated keystrokes. In other words, PsychoPy considered specific keys as either the correct or incorrect responses depending on the stimulus presented on the computer screen.
+
+<img src="fig/CogMo-fig_experimental-setup.png" width ="900">
+
+In practice, any keystrokes may be used. The following keys were used and are demonstrated as an example. It should also be borne in mind that PsychoPy specifically ignored keys corresponding to 5% MVC responses during the 30% MVC blocks to avoid "undershoot" being treated as valid responses.
+
+| Hand (Correct Response) | Target Force | Emulated Key |
+| :--- | :--- | :--- |
+| **Right Hand** | 5% MVC | `m` |
+| **Right Hand** | 30% MVC | `l` |
+| **Left Hand** | 5% MVC | `z` |
+| **Left Hand** | 30% MVC | `a` |
+
+> [!NOTE]
+> The **Hand** column refers to the correct physical response required by the participant, which triggers the specific keystroke emulated by the Arduino. During 30% MVC blocks, 5% MVC keys were ignored to prevent premature responses.
+
+
+
+
+
+
+
+
+
+
