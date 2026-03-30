@@ -19,7 +19,7 @@ jobs:
           - os: windows-latest
             req_file: requirements_windows.txt
             artifact_name: CogMoToolkit-Windows
-            python_version: '3.13'
+            python_version: '3.12'
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -49,7 +49,7 @@ jobs:
 
       - name: PyInstaller Build
         run: |
-          python -m PyInstaller CogMo.spec --clean
+          python -m PyInstaller CogMo.spec --clean --noconsole
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
