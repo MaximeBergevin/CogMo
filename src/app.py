@@ -40,7 +40,7 @@ from threading import Timer
 #---------------------------
 from get_condition_lookup import get_condition_lookup
 from data_loader import load_signal, find_best_match
-from trial_segmentation import get_trial_data_and_metrics, get_trial_segment, create_trial_lookup
+from trial_segmentation import get_trial_data_and_metrics, get_trial_segment, create_trial_lookup, analyze_trial_metrics
 import force_analyses as fa
 import emg_analyses as ea
 import data_writer as dw
@@ -1521,6 +1521,40 @@ def update_trial_data(
         elif base_metrics.get('force_offset_time') is not None and base_metrics.get('force_offset_time') >= trial_view_df['time'].iloc[-1]:
             base_metrics['trial_status'] = 'late_offset'
 
+    # Accuracy metric
+    # ----------------
+    # --- Accuracy & Error Categorization ---
+    base_metrics['accuracy'] = 0
+    
+    # Check for correct hand
+    detected = str(base_metrics.get('response_hand', '')).lower().strip()
+    expected = str(base_metrics.get('expected_response', '')).lower().strip()
+    
+    if expected in ['r', 'right']: expected = 'right'
+    if expected in ['l', 'left']: expected = 'left'
+    
+    correct_hand = (detected == expected) and (expected is not None)
+
+    # Check if the threshold was reached
+    reached_target = False
+    if base_metrics.get('peak_value') is not None and base_metrics.get('threshold') is not None:
+        reached_target = base_metrics['peak_value'] >= base_metrics['threshold']
+    
+    if correct_hand and reached_target:
+        base_metrics['error_type'] = 'correct'
+        base_metrics['accuracy'] = 1
+    elif not correct_hand and reached_target:
+        base_metrics['error_type'] = 'cognitive_error'
+        base_metrics['accuracy'] = 0
+    elif base_metrics.get('trial_status') == 'omission':
+        base_metrics['error_type'] = 'omission_error'
+        base_metrics['accuracy'] = 0
+    else:
+        # Attempted with correct hand (or no clear wrong hand dominance), 
+        # but didn't hit the target N.
+        base_metrics['error_type'] = 'motor_error'
+        base_metrics['accuracy'] = 0
+
     # Plotting and Metrics Display
     # -----------------------------
     base_metrics['block_trial_str'] = f"Block {selected_block}, Trial {selected_trial}"
@@ -1549,6 +1583,8 @@ def update_trial_data(
         create_metric_p("Block", "block"),
         create_metric_p("Trial Status", "trial_status"),
         create_metric_p("Response Hand", "response_hand"),
+        create_metric_p("Accuracy (Binary)", "accuracy"),
+        create_metric_p("Performance Category", "error_type"),
     ]
     latency_metrics = [
         create_metric_p("Motor Reaction Time", "motor_reaction_time", "ms"),

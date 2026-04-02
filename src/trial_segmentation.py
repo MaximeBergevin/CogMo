@@ -141,17 +141,7 @@ def get_trial_data_and_metrics(
     pre_window: float,
     post_window: float
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    """
-    The primary entry point for the Trial Viewer.
-    
-    Execution Flow:
-    1. Identifies the Block and Trial number from the global index.
-    2. Locates the exact timestamp (stim_time) where the trial began.
-    3. Slices the raw data for visual display (trial_view_df).
-    4. Calculates 'Base Metrics' (ID, Demand, Threshold) required for the 
-       subsequent analysis pipeline.
-    """
-    # Find trial coordinates in the lookup table
+
     trial_info_row = trial_lookup.query(f'global_index == @trial_index')
     if trial_info_row.empty:
         raise ValueError(f"Trial index {trial_index} not found.")
@@ -159,15 +149,21 @@ def get_trial_data_and_metrics(
     block_numb = int(trial_info_row['block_number'].iloc[0])
     trial_numb = int(trial_info_row['trial_number'].iloc[0])
 
-    # Find the specific row in the full dataset marking the trial start
     stim_row = full_df.query(f"block_number == {block_numb} & trial_number == {trial_numb} & is_trial_start == True")
     if stim_row.empty:
         raise ValueError(f"Stimulus row not found for block {block_numb}, trial {trial_numb}.")
     
+    expected_response = None
+    if 'comments' in stim_row.columns:
+        comment_text = str(stim_row['comments'].iloc[0]).lower()
+        if 'right' in comment_text or ' stimulus_r' in comment_text:
+            expected_response = 'right'
+        elif 'left' in comment_text or ' stimulus_l' in comment_text:
+            expected_response = 'left'
+    
     time_col = channel_map.get('time')
     stim_time = stim_row[time_col].iloc[0]
     
-    # Find the specific row in the full dataset marking the trial start
     trial_view_df = get_trial_segment(full_df, stim_time, time_col, pre_window, post_window)
 
     # Resolve metadata from the condition spreadsheet
@@ -179,12 +175,10 @@ def get_trial_data_and_metrics(
     
     motor_demand = condition_row.get(motor_col) if motor_col else None
     
-    # Initial hand determination used solely to establish the force threshold
     force_r_col = channel_map.get('force_right')
     force_l_col = channel_map.get('force_left')
     initial_response_hand = 'right' if trial_view_df[force_r_col].max() > trial_view_df[force_l_col].max() else 'left'
     
-    # Establish target force threshold
     threshold = None
     mvc_value = mvc_right if initial_response_hand == 'right' else mvc_left
     if motor_demand is not None and mvc_value is not None:
@@ -203,6 +197,7 @@ def get_trial_data_and_metrics(
         'global_index': trial_index,
         'block': block_numb,
         'stim_time': stim_time,
+        'expected_response': expected_response, 
         'cognitive_demand': condition_row.get(cog_col) if cog_col else None,
         'motor_demand': motor_demand,
         'threshold': threshold,
