@@ -119,8 +119,8 @@ def create_trial_figure(
     """
     # --- Signal & Mapping Setup ---
     time_col = channel_map.get('time')
-    force_r_col = channel_map.get('force_right')
-    force_l_col = channel_map.get('force_left')
+    force_r_col = 'force_right'
+    force_l_col = 'force_left'
     emg_r_col = channel_map.get('emg_right')
     emg_l_col = channel_map.get('emg_left')
     include_emg = bool(emg_r_col and emg_l_col)
@@ -883,6 +883,56 @@ def toggle_emg_visibility(is_checked):
         return {'display': 'none'} # Hide dropdowns
 
 
+@app.callback(
+    Output('mapping-status-message', 'children'),
+    Output('mapping-status-message', 'style'),
+    Input('confirm-mapping-btn', 'n_clicks'),
+    State('signal-data-store', 'data'),
+    State('time-channel-dropdown', 'value'),
+    State('force-right-channel-dropdown', 'value'),
+    State('force-left-channel-dropdown', 'value'),
+    State('emg-right-channel-dropdown', 'value'),
+    State('emg-left-channel-dropdown', 'value'),
+    prevent_initial_call=True
+)
+def finalize_and_standardize_feather(n_clicks, session_id, t_col, fr_col, fl_col, er_col, el_col):
+    if not n_clicks or not session_id:
+        return "", {"display": "none"}
+
+    try:
+        # 1. Access the Feather file
+        app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
+        filepath = app_temp_dir / f"{session_id}.feather"
+        
+        if not filepath.exists():
+            return "Error: Session file not found.", {"color": "red"}
+            
+        df = pd.read_feather(filepath)
+
+        # 2. Create the RENAME MAP (Raw User Selection -> Standard Internal Name)
+        # We only map columns that the user actually selected
+        mapping = {}
+        if t_col:  mapping[t_col]  = 'time'
+        if fr_col: mapping[fr_col] = 'force_right'
+        if fl_col: mapping[fl_col] = 'force_left'
+        if er_col: mapping[er_col] = 'emg_right'
+        if el_col: mapping[el_col] = 'emg_left'
+
+        # 3. Apply the rename
+        # We use errors='ignore' in case the user selected the same name twice 
+        # or it's already renamed
+        df = df.rename(columns=mapping)
+
+        # 4. OVERWRITE the Feather file
+        # This is the "under the hood" commitment
+        df.to_feather(filepath)
+
+        return f"Mapping confirmed! {len(mapping)} channels standardized.", {"color": "green", "fontWeight": "bold"}
+
+    except Exception as e:
+        return f"Error during standardization: {str(e)}", {"color": "red"}
+    
+
 # Callback to control channel name storage
 # -----------------------------------------
 @app.callback(
@@ -908,9 +958,6 @@ def save_channel_mapping(time_col, fr_col, fl_col, er_col, el_col):
         'emg_right' : er_col,
         'emg_left' : el_col
     }
-
-    #TODO: Comment out for deployment, this is for debugging/testing purposes
-    #print(f"Channel mapping updated:\n {channel_map}")
 
     return channel_map
 
@@ -1252,6 +1299,9 @@ def update_trial_data(
     else:
         btn_text, btn_color = "Discard Trial", "danger"
 
+    # Inverse mapping - standardize internal names
+    inv_map = {v: k for k, v in channel_map.items() if v and v in full_df.columns}
+    full_df = full_df.rename(columns = inv_map)
 
     # Call function to get the base metrics (threshold, stim_time, etc.)
     # and the DataFrame for the user's visualization window.
@@ -1292,7 +1342,6 @@ def update_trial_data(
     peak_info = fa.find_main_contraction_peak(
         full_df=full_df,
         stim_time=base_metrics['stim_time'],
-        channel_map=channel_map,
         threshold=base_metrics['threshold'],
         min_valid_rt_s=min_valid_rt_s,
         min_prominence_n=min_prominence_n,
@@ -1439,7 +1488,6 @@ def update_trial_data(
                 # Calculate local dynamic thresholds for BOTH onset and offset
                 onset_threshold = ea.calculate_dynamic_threshold(
                     full_df=analysis_df,
-                    channel_map=channel_map,
                     response_hand=base_metrics['response_hand'],
                     duration_sec=0.1,  
                     h_multiplier=emg_h_onset if emg_h_onset is not None else 15.0 # From UI
@@ -1447,7 +1495,6 @@ def update_trial_data(
                 
                 offset_threshold = ea.calculate_dynamic_threshold(
                     full_df=analysis_df,
-                    channel_map=channel_map,
                     response_hand=base_metrics['response_hand'],
                     duration_sec=0.1,  
                     h_multiplier=emg_h_offset if emg_h_offset is not None else 30.0 # From UI
@@ -1469,7 +1516,6 @@ def update_trial_data(
                 # Detect EMG boundaries using dual thresholds
                 onset_time, offset_time, active_threshold = ea.find_emg_boundaries(
                     signal_df=analysis_df,
-                    channel_map=channel_map,
                     response_hand=base_metrics['response_hand'],
                     stim_time=base_metrics['stim_time'],
                     force_onset_time=base_metrics.get('force_onset_time'),
@@ -1493,7 +1539,6 @@ def update_trial_data(
                     if run_emg_rms:
                         base_metrics['emg_rms'] = ea.calculate_emg_rms(
                             full_df=analysis_df,
-                            channel_map=channel_map,
                             response_hand=base_metrics['response_hand'],
                             onset_time=onset_time,
                             offset_time=offset_time

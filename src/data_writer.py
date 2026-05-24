@@ -24,6 +24,10 @@ def export_trial_metrics(
     run_pmrt, run_emg_rms, emg_min_duration_ms, emg_h_onset, emg_h_offset,
     current_discards
 ):
+    
+    inv_map = {v: k for k, v in channel_map.items() if v and v in full_df.columns}
+    full_df = full_df.rename(columns=inv_map)
+
     lookup_df = pd.DataFrame(trial_lookup)
     cond_df = pd.DataFrame(condition_data)
     all_final_metrics = []
@@ -41,7 +45,7 @@ def export_trial_metrics(
 
             # Peak Detection & Trial Status
             peak_info = fa.find_main_contraction_peak(
-                full_df=full_df, stim_time=base_metrics['stim_time'], channel_map=channel_map,
+                full_df=full_df, stim_time=base_metrics['stim_time'],
                 threshold=base_metrics['threshold'], min_valid_rt_s=min_valid_rt_s,
                 min_prominence_n=min_prominence_n, search_window_pre_s=pre_stim_search_s,
                 search_window_post_s=post_stim_search_s

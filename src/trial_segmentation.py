@@ -175,9 +175,8 @@ def get_trial_data_and_metrics(
     
     motor_demand = condition_row.get(motor_col) if motor_col else None
     
-    force_r_col = channel_map.get('force_right')
-    force_l_col = channel_map.get('force_left')
-    initial_response_hand = 'right' if trial_view_df[force_r_col].max() > trial_view_df[force_l_col].max() else 'left'
+    # Refactor line 180 to this:
+    initial_response_hand = 'right' if trial_view_df['force_right'].max() > trial_view_df['force_left'].max() else 'left'   
     
     threshold = None
     mvc_value = mvc_right if initial_response_hand == 'right' else mvc_left
