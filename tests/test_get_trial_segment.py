@@ -10,7 +10,7 @@ from trial_segmentation import (
     get_trial_data_and_metrics
 )
 
-# Import the helper functions/fixtures from conftest
+# Import helper functions/fixtures from conftest
 from conftest import create_mock_trial_lookup, create_mock_signal_data, create_mock_condition_data
 
 def test_create_trial_lookup():
@@ -38,7 +38,7 @@ def test_create_trial_lookup():
     assert_frame_equal(result, expected_lookup)
 
 # ==============================================================================
-# --- REFACTORED: Test for the updated get_trial_data_and_metrics function ---
+# Test for the updated get_trial_data_and_metrics function ---
 # ==============================================================================
 def test_get_trial_data_and_metrics(mock_trial_lookup, mock_signal_data_factory, mock_condition_data):
     """
@@ -49,22 +49,23 @@ def test_get_trial_data_and_metrics(mock_trial_lookup, mock_signal_data_factory,
     stim_time_val = 1.5
     mvc_l_val = 200.0
     mvc_r_val = 210.0
-    pre_window_val = 0.5 # Use a distinct value for testing the slice
-    post_window_val = 1.0 # Use a distinct value for testing the slice
+    pre_window_val = 0.5 
+    post_window_val = 1.0 
     
     mock_force_df, _ = mock_signal_data_factory(
         stim_time_within_segment=stim_time_val,
-        force_r_col_name="OriginalForceR",
-        force_l_col_name="OriginalForceL"
+        force_r_col_name="force_right",
+        force_l_col_name="force_left"
     )
     
+    # Standard internal channel map convention
     channel_map = {
         'time': 'time',
-        'force_right': 'OriginalForceR',
-        'force_left': 'OriginalForceL'
+        'force_right': 'force_right',
+        'force_left': 'force_left'
     }
 
-    # --- Call the function under test ---
+    # --- Call function under test ---
     trial_view_df, base_metrics = get_trial_data_and_metrics(
         full_df=mock_force_df,
         trial_lookup=mock_trial_lookup,
@@ -110,7 +111,7 @@ def test_get_trial_segment_slicing():
     """Unit test to ensure get_trial_segment slices the correct time window."""
     
     # Create a simple time series DataFrame
-    full_df = pd.DataFrame({'time': np.arange(0, 10, 0.1)}) # 10s of data at 10Hz
+    full_df = pd.DataFrame({'time': np.arange(0, 10, 0.1)}) 
     
     stim_time = 5.0
     pre_window = 1.0

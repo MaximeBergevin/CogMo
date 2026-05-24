@@ -43,7 +43,6 @@ def _condition_tkeo(raw_signal: np.ndarray, fs: float, lp_cutoff: float = 50.0) 
 
 def calculate_dynamic_threshold(
     full_df: pd.DataFrame,
-    channel_map: Dict[str, str],
     response_hand: str,
     duration_sec: float = 0.1,
     h_multiplier: float = 15.0
@@ -55,7 +54,7 @@ def calculate_dynamic_threshold(
     duration within the trial. The threshold is then defined as the mean of that 
     quiet window plus a standard deviation multiplier (h).
     """
-    emg_col = channel_map.get(f"emg_{response_hand}")
+    emg_col = f"emg_{response_hand}"
     if emg_col is None or emg_col not in full_df.columns:
         return 999.0
     
@@ -102,7 +101,6 @@ def calculate_dynamic_threshold(
 
 def find_emg_boundaries(
     signal_df: pd.DataFrame,
-    channel_map: Dict[str, str],
     response_hand: str,
     stim_time: float,
     force_onset_time: float,
@@ -124,7 +122,7 @@ def find_emg_boundaries(
 
     time = signal_df[signal_df.columns[0]].values
     fs = 1.0 / np.mean(np.diff(time))
-    emg_col = channel_map.get(f"emg_{response_hand}")
+    emg_col = f"emg_{response_hand}"
     
     # Pre-processing and conditioning
     raw_signal = signal_df[emg_col].values.astype(float) - np.mean(signal_df[emg_col].values)
@@ -185,7 +183,6 @@ def find_emg_boundaries(
 
 def calculate_emg_rms(
     full_df: pd.DataFrame,
-    channel_map: Dict[str, str],
     response_hand: str,
     onset_time: float,
     offset_time: float
@@ -196,7 +193,7 @@ def calculate_emg_rms(
     RMS is a measure of the signal's power. It is calculated over the specific 
     detected burst duration (from onset to offset).
     """
-    emg_col = channel_map.get(f"emg_{response_hand}")
+    emg_col = f"emg_{response_hand}"
     time_col = full_df.columns[0]
     
     if emg_col is None or onset_time is None or offset_time is None:

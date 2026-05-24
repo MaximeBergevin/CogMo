@@ -28,19 +28,16 @@ def test_calculate_emg_rms_accuracy(
         emd_s=emd_s,
         dominant_force="right"
     )
-    
-    channel_map = {"emg_right": "emg_right", "emg_left": "emg_left"}
 
-    # 2. Call function under test
+    # Call function under test
     rms_value = calculate_emg_rms(
         full_df=mock_df,
-        channel_map=channel_map,
         response_hand="right",
         onset_time=expected['expected_emg_onset'],
         offset_time=expected['expected_offset_time']
     )
 
-    # 3. Accuracy Assertions
+    # Accuracy Assertions
     assert rms_value is not None, f"Failed for {_test_id}"
     assert rms_value == pytest.approx(expected_rms, abs = 0.15)
 
@@ -51,8 +48,7 @@ def test_calculate_emg_rms_invalid_inputs():
         "time": [0.0, 0.1], 
         "emg_right": [0.01, 0.02]
     })
-    channel_map = {"emg_right": "emg_right"}
     
     # Check for None inputs or out-of-bounds segments
-    assert calculate_emg_rms(df, channel_map, "right", None, 0.1) is None
-    assert calculate_emg_rms(df, channel_map, "right", 5.0, 6.0) is None
+    assert calculate_emg_rms(df, "right", None, 0.1) is None
+    assert calculate_emg_rms(df, "right", 5.0, 6.0) is None

@@ -30,13 +30,9 @@ def test_find_emg_boundaries_parametrized(
         burst_time_s=1
     )
     
-    channel_map = {"emg_right": "emg_right", "emg_left": "emg_left"}
-    
-    # 2. Call the function
-    # Note: the function internally calculates fs from the time column
+    # Call function
     onset, offset, _ = find_emg_boundaries(
         signal_df=mock_df,
-        channel_map=channel_map,
         response_hand="right",
         stim_time=expected['stim_time_exact'],
         force_onset_time=expected['expected_force_onset'],
@@ -46,12 +42,12 @@ def test_find_emg_boundaries_parametrized(
         threshold_off=0.002
     )
 
-    # 3. Assertions
+    # Assertions
     if expected_valid:
         assert onset is not None
-        # High tolerance because of stochastic nature of EMG + imperfect syntethic data processing
-        # Most simulation appear to be in the range of ~70-100 ms error, ocassionaly more
-        # Outside simulation with non-simulated truncadated EMG burst managed to show ~30ms delayed
+        # High tolerance because of stochastic nature of EMG + imperfect synthetic data processing
+        # Most simulation appear to be in the range of ~70-100 ms error, occasionally more
+        # Outside simulation with non-simulated truncated EMG burst managed to show ~30ms delayed
         assert onset == pytest.approx(expected['expected_emg_onset'], abs=0.2)
         assert offset == pytest.approx(expected['expected_offset_time'], abs=0.3)
     else:

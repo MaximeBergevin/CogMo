@@ -491,7 +491,6 @@ def find_contraction_onset(
 def find_main_contraction_peak(
     full_df: pd.DataFrame,
     stim_time: float,
-    channel_map: Dict[str, str],
     threshold: float,     
     min_valid_rt_s: float,
     min_prominence_n: float,
@@ -507,8 +506,8 @@ def find_main_contraction_peak(
     import pandas as pd
     from scipy import signal
     
-    force_r_col = channel_map.get('force_right')
-    force_l_col = channel_map.get('force_left')
+    force_r_col = 'force_right'
+    force_l_col = 'force_left'
 
     # 1. Define Search Window
     search_start = stim_time - search_window_pre_s

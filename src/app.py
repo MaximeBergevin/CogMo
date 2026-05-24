@@ -40,9 +40,10 @@ from threading import Timer
 #---------------------------
 from get_condition_lookup import get_condition_lookup
 from data_loader import load_signal, find_best_match
-from trial_segmentation import get_trial_data_and_metrics, get_trial_segment, create_trial_lookup
+from trial_segmentation import get_trial_data_and_metrics, get_trial_segment, create_trial_lookup, analyze_trial_metrics
 import force_analyses as fa
 import emg_analyses as ea
+import data_writer as dw
 
 # DEPENDENCIES FILE MANAGEMENT:
 # Requirements.in & requirements.txt (Windows & MacOS)
@@ -118,8 +119,8 @@ def create_trial_figure(
     """
     # --- Signal & Mapping Setup ---
     time_col = channel_map.get('time')
-    force_r_col = channel_map.get('force_right')
-    force_l_col = channel_map.get('force_left')
+    force_r_col = 'force_right'
+    force_l_col = 'force_left'
     emg_r_col = channel_map.get('emg_right')
     emg_l_col = channel_map.get('emg_left')
     include_emg = bool(emg_r_col and emg_l_col)
@@ -882,6 +883,56 @@ def toggle_emg_visibility(is_checked):
         return {'display': 'none'} # Hide dropdowns
 
 
+@app.callback(
+    Output('mapping-status-message', 'children'),
+    Output('mapping-status-message', 'style'),
+    Input('confirm-mapping-btn', 'n_clicks'),
+    State('signal-data-store', 'data'),
+    State('time-channel-dropdown', 'value'),
+    State('force-right-channel-dropdown', 'value'),
+    State('force-left-channel-dropdown', 'value'),
+    State('emg-right-channel-dropdown', 'value'),
+    State('emg-left-channel-dropdown', 'value'),
+    prevent_initial_call=True
+)
+def finalize_and_standardize_feather(n_clicks, session_id, t_col, fr_col, fl_col, er_col, el_col):
+    if not n_clicks or not session_id:
+        return "", {"display": "none"}
+
+    try:
+        # 1. Access the Feather file
+        app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
+        filepath = app_temp_dir / f"{session_id}.feather"
+        
+        if not filepath.exists():
+            return "Error: Session file not found.", {"color": "red"}
+            
+        df = pd.read_feather(filepath)
+
+        # 2. Create the RENAME MAP (Raw User Selection -> Standard Internal Name)
+        # We only map columns that the user actually selected
+        mapping = {}
+        if t_col:  mapping[t_col]  = 'time'
+        if fr_col: mapping[fr_col] = 'force_right'
+        if fl_col: mapping[fl_col] = 'force_left'
+        if er_col: mapping[er_col] = 'emg_right'
+        if el_col: mapping[el_col] = 'emg_left'
+
+        # 3. Apply the rename
+        # We use errors='ignore' in case the user selected the same name twice 
+        # or it's already renamed
+        df = df.rename(columns=mapping)
+
+        # 4. OVERWRITE the Feather file
+        # This is the "under the hood" commitment
+        df.to_feather(filepath)
+
+        return f"Mapping confirmed! {len(mapping)} channels standardized.", {"color": "green", "fontWeight": "bold"}
+
+    except Exception as e:
+        return f"Error during standardization: {str(e)}", {"color": "red"}
+    
+
 # Callback to control channel name storage
 # -----------------------------------------
 @app.callback(
@@ -907,9 +958,6 @@ def save_channel_mapping(time_col, fr_col, fl_col, er_col, el_col):
         'emg_right' : er_col,
         'emg_left' : el_col
     }
-
-    #TODO: Comment out for deployment, this is for debugging/testing purposes
-    #print(f"Channel mapping updated:\n {channel_map}")
 
     return channel_map
 
@@ -1251,6 +1299,9 @@ def update_trial_data(
     else:
         btn_text, btn_color = "Discard Trial", "danger"
 
+    # Inverse mapping - standardize internal names
+    inv_map = {v: k for k, v in channel_map.items() if v and v in full_df.columns}
+    full_df = full_df.rename(columns = inv_map)
 
     # Call function to get the base metrics (threshold, stim_time, etc.)
     # and the DataFrame for the user's visualization window.
@@ -1291,7 +1342,6 @@ def update_trial_data(
     peak_info = fa.find_main_contraction_peak(
         full_df=full_df,
         stim_time=base_metrics['stim_time'],
-        channel_map=channel_map,
         threshold=base_metrics['threshold'],
         min_valid_rt_s=min_valid_rt_s,
         min_prominence_n=min_prominence_n,
@@ -1438,7 +1488,6 @@ def update_trial_data(
                 # Calculate local dynamic thresholds for BOTH onset and offset
                 onset_threshold = ea.calculate_dynamic_threshold(
                     full_df=analysis_df,
-                    channel_map=channel_map,
                     response_hand=base_metrics['response_hand'],
                     duration_sec=0.1,  
                     h_multiplier=emg_h_onset if emg_h_onset is not None else 15.0 # From UI
@@ -1446,7 +1495,6 @@ def update_trial_data(
                 
                 offset_threshold = ea.calculate_dynamic_threshold(
                     full_df=analysis_df,
-                    channel_map=channel_map,
                     response_hand=base_metrics['response_hand'],
                     duration_sec=0.1,  
                     h_multiplier=emg_h_offset if emg_h_offset is not None else 30.0 # From UI
@@ -1468,7 +1516,6 @@ def update_trial_data(
                 # Detect EMG boundaries using dual thresholds
                 onset_time, offset_time, active_threshold = ea.find_emg_boundaries(
                     signal_df=analysis_df,
-                    channel_map=channel_map,
                     response_hand=base_metrics['response_hand'],
                     stim_time=base_metrics['stim_time'],
                     force_onset_time=base_metrics.get('force_onset_time'),
@@ -1492,7 +1539,6 @@ def update_trial_data(
                     if run_emg_rms:
                         base_metrics['emg_rms'] = ea.calculate_emg_rms(
                             full_df=analysis_df,
-                            channel_map=channel_map,
                             response_hand=base_metrics['response_hand'],
                             onset_time=onset_time,
                             offset_time=offset_time
@@ -1519,6 +1565,40 @@ def update_trial_data(
             base_metrics['trial_status'] = 'late_response'
         elif base_metrics.get('force_offset_time') is not None and base_metrics.get('force_offset_time') >= trial_view_df['time'].iloc[-1]:
             base_metrics['trial_status'] = 'late_offset'
+
+    # Accuracy metric
+    # ----------------
+    # --- Accuracy & Error Categorization ---
+    base_metrics['accuracy'] = 0
+    
+    # Check for correct hand
+    detected = str(base_metrics.get('response_hand', '')).lower().strip()
+    expected = str(base_metrics.get('expected_response', '')).lower().strip()
+    
+    if expected in ['r', 'right']: expected = 'right'
+    if expected in ['l', 'left']: expected = 'left'
+    
+    correct_hand = (detected == expected) and (expected is not None)
+
+    # Check if the threshold was reached
+    reached_target = False
+    if base_metrics.get('peak_value') is not None and base_metrics.get('threshold') is not None:
+        reached_target = base_metrics['peak_value'] >= base_metrics['threshold']
+    
+    if correct_hand and reached_target:
+        base_metrics['error_type'] = 'correct'
+        base_metrics['accuracy'] = 1
+    elif not correct_hand and reached_target:
+        base_metrics['error_type'] = 'cognitive_error'
+        base_metrics['accuracy'] = 0
+    elif base_metrics.get('trial_status') == 'omission':
+        base_metrics['error_type'] = 'omission_error'
+        base_metrics['accuracy'] = 0
+    else:
+        # Attempted with correct hand (or no clear wrong hand dominance), 
+        # but didn't hit the target N.
+        base_metrics['error_type'] = 'motor_error'
+        base_metrics['accuracy'] = 0
 
     # Plotting and Metrics Display
     # -----------------------------
@@ -1548,6 +1628,8 @@ def update_trial_data(
         create_metric_p("Block", "block"),
         create_metric_p("Trial Status", "trial_status"),
         create_metric_p("Response Hand", "response_hand"),
+        create_metric_p("Accuracy (Binary)", "accuracy"),
+        create_metric_p("Performance Category", "error_type"),
     ]
     latency_metrics = [
         create_metric_p("Motor Reaction Time", "motor_reaction_time", "ms"),
@@ -1698,150 +1780,48 @@ def manage_discard_list(n_clicks, lookup_data, block, trial, current_discards):
         
     return new_discards
 
-# Callback for trial data download
-# ---------------------------------------
 @app.callback(
     Output("download-trial-csv", "data"),
     Input("btn-download-trial", "n_clicks"),
-    # --- Identifiers ---
-    State('signal-data-store', 'data'),      # session_id
-    State('trial-lookup-store', 'data'),     # list of all trials
-    State('condition-data-store', 'data'),   
-    State('channel-map-store', 'data'),
-    # --- Analysis Settings (to match the UI) ---
-    State('mvc-left-store', 'data'),
-    State('mvc-right-store', 'data'),
-    State('pre-stim-window-input', 'value'),
-    State('post-stim-window-input', 'value'),
-    State('min-valid-rt-input', 'value'),
-    State('min-prominence-input', 'value'),
-    State('pre-stim-search-input', 'value'),
-    State('post-stim-search-input', 'value'),
-    # --- Analysis Toggles ---
-    State('analysis-peak-force-checkbox', 'value'),
-    State('analysis-mrspt-checkbox', 'value'),
-    State('analysis-mrt-checkbox', 'value'),
-    State('analysis-fti-checkbox', 'value'),
-    State('analysis-mean-force-checkbox', 'value'),
-    State('analysis-rfd-checkbox', 'value'),
-    State('analysis-rfd-window-input', 'value'),
-    # --- EMG Settings ---
-    State('analysis-pmrt-checkbox', 'value'),
-    State('analysis-rms-checkbox', 'value'),
-    State('emg-min-duration-input', 'value'),
-    State('emg-h-onset-input', 'value'), 
-    State('emg-h-offset-input', 'value'),
-    # --- Discard Store ---
-    State('discarded-trials-store', 'data'),
+    [State('signal-data-store', 'data'),
+     State('trial-lookup-store', 'data'),
+     State('condition-data-store', 'data'),
+     State('channel-map-store', 'data'),
+     State('mvc-left-store', 'data'),
+     State('mvc-right-store', 'data'),
+     State('pre-stim-window-input', 'value'),
+     State('post-stim-window-input', 'value'),
+     State('min-valid-rt-input', 'value'), 
+     State('min-prominence-input', 'value'),
+     State('pre-stim-search-input', 'value'), 
+     State('post-stim-search-input', 'value'),
+     State('analysis-peak-force-checkbox', 'value'), 
+     State('analysis-mrspt-checkbox', 'value'),
+     State('analysis-mrt-checkbox', 'value'), 
+     State('analysis-fti-checkbox', 'value'),
+     State('analysis-mean-force-checkbox', 'value'), 
+     State('analysis-rfd-checkbox', 'value'),
+     State('analysis-rfd-window-input', 'value'), 
+     State('analysis-pmrt-checkbox', 'value'),
+     State('analysis-rms-checkbox', 'value'), 
+     State('emg-min-duration-input', 'value'),
+     State('emg-h-onset-input', 'value'), 
+     State('emg-h-offset-input', 'value'),
+     State('discarded-trials-store', 'data')],
     prevent_initial_call=True,
 )
-def handle_bulk_metrics_download(
-    n_clicks, session_id, lookup_dict, condition_dict, channel_map,
-    mvc_left, mvc_right, pre_window, post_window, 
-    min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
-    run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral,
-    run_mean_force, run_rfd, rfd_window_ms,
-    run_pmrt, run_emg_rms, emg_min_duration_ms, emg_h_onset, emg_h_offset,
-    current_discards # Added argument
-):
+def handle_bulk_metrics_download(n_clicks, session_id, *args):
     if not n_clicks:
         raise PreventUpdate
 
-    # Setup data
+    # Load data
     app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
-    filepath = app_temp_dir / f"{session_id}.feather"
-    full_df = pd.read_feather(filepath)
-    trial_lookup = pd.DataFrame(lookup_dict)
-    condition_data = pd.DataFrame(condition_dict)
+    full_df = pd.read_feather(app_temp_dir / f"{session_id}.feather")
     
-    # Ensure discards is a list for the 'in' check
-    current_discards = current_discards or []
+    # Call the helper
+    final_df = dw.export_trial_metrics(full_df, *args)
     
-    all_final_metrics = []
-
-    # Start the loop
-    for _, trial_row in trial_lookup.iterrows():
-        global_idx = trial_row['global_index']
-        
-        # Base data & thresholds
-        trial_view_df, base_metrics = get_trial_data_and_metrics(
-            full_df=full_df, trial_lookup=trial_lookup, condition_data=condition_data,
-            trial_index=global_idx, channel_map=channel_map, mvc_left=mvc_left, mvc_right=mvc_right,
-            pre_window=pre_window, post_window=post_window
-        )
-
-        # --- ADD DISCARD FLAG ---
-        base_metrics['discarded_flag'] = 1 if global_idx in current_discards else 0
-
-        # Peak finder
-        peak_info = fa.find_main_contraction_peak(
-            full_df=full_df, stim_time=base_metrics['stim_time'], channel_map=channel_map,
-            threshold=base_metrics['threshold'], min_valid_rt_s=min_valid_rt_s,
-            min_prominence_n=min_prominence_n, search_window_pre_s=pre_stim_search_s,
-            search_window_post_s=post_stim_search_s
-        )
-        
-        base_metrics['trial_status'] = peak_info['status']
-        base_metrics['response_hand'] = peak_info['response_hand']
-
-        # Metric pipeline
-        if peak_info['analysis_df'] is not None and base_metrics['response_hand'] is not None:
-            analysis_df = peak_info['analysis_df']
-            peak_time = peak_info['peak_time']
-            
-            # Peak & Timing
-            base_metrics.update({
-                'peak_time': peak_info['peak_time'],
-                'peak_value': peak_info['peak_value'],
-                'time_to_peak': peak_info['peak_time'] - base_metrics['stim_time']
-            })
-
-            # Onset/Offset for Force
-            onset_time = fa.find_contraction_onset(analysis_df, base_metrics['stim_time'], peak_time, base_metrics['response_hand'])
-            offset_time = fa.find_contraction_offset(analysis_df, peak_time, peak_info['peak_value'], base_metrics['response_hand'])
-            baseline = fa.find_baseline_force(analysis_df, peak_time, base_metrics['response_hand'])
-            
-            base_metrics['force_onset_time'] = onset_time
-            base_metrics['force_offset_time'] = offset_time
-
-            # Calculate Individual Metrics
-            if run_peak_force:
-                mvc_val = mvc_right if base_metrics['response_hand'] == 'right' else mvc_left
-                base_metrics.update(fa.peak_force_metrics(base_metrics['peak_value'], peak_time, base_metrics['stim_time'], base_metrics['threshold'], mvc_val))
-            
-            if run_motor_reaction_time:
-                base_metrics['motor_reaction_time'] = fa.motor_reaction_time(base_metrics['stim_time'], onset_time)
-            
-            if run_rfd:
-                base_metrics.update(fa.calculate_rfd(analysis_df, onset_time, peak_time, baseline, base_metrics['response_hand'], rfd_window_ms))
-
-            # EMG analyses
-            if (channel_map.get('emg_left') and channel_map.get('emg_right')) and (run_pmrt or run_emg_rms):
-                try:
-                    on_thresh = ea.calculate_dynamic_threshold(analysis_df, channel_map, base_metrics['response_hand'], 0.1, emg_h_onset)
-                    off_thresh = ea.calculate_dynamic_threshold(analysis_df, channel_map, base_metrics['response_hand'], 0.1, emg_h_offset)
-                    
-                    emg_on, emg_off, _ = ea.find_emg_boundaries(analysis_df, channel_map, base_metrics['response_hand'], base_metrics['stim_time'], onset_time, offset_time, emg_min_duration_ms, on_thresh, off_thresh)
-                    
-                    if emg_on:
-                        base_metrics['premotor_reaction_time'] = (emg_on - base_metrics['stim_time']) * 1000
-                        if run_emg_rms:
-                            base_metrics['emg_rms'] = ea.calculate_emg_rms(analysis_df, channel_map, base_metrics['response_hand'], emg_on, emg_off)
-                except: 
-                    pass
-
-        all_final_metrics.append(base_metrics)
-
-    # Save to CSV
-    final_df = pd.DataFrame(all_final_metrics)
-    
-    #print(f"✅ Bulk Export Complete: {len(final_df)} trials analyzed.")
-    
-    return dcc.send_data_frame(
-        final_df.to_csv, 
-        f"CogMo_Bulk_Export_{session_id}.csv", 
-        index=False
-    )
+    return dcc.send_data_frame(final_df.to_csv, f"CogMo_Bulk_Export_{session_id}.csv", index=False)
 
 # ==============================================================================
 # --- MAIN APP EXECUTION ---
