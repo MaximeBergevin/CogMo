@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: "Bergevin"
+    given-names: "Maxime"
+    orcid: "https://orcid.org/my-orcid?orcid=0000-0002-0343-8900"
+title: "CogMo: A Python Dash app for processing behavioral and physiological data in psychomotor studies"
+version: "1.x.x-beta.2"
+doi: "10.5281/zenodo.20387469"
+date-released: "2026-05-25"
+url: "https://github.com/MaximeBergevin/CogMo"
