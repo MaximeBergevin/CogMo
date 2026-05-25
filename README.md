@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/1048724891.svg)](https://doi.org/10.5281/zenodo.20387468)
+
 # CogMo
 
 CogMo is a specialized tool for batch processing and visualizing force data exported from any data acquisition software. The CogMo Tool provides a dashboard for visual inspection of every trial in a novel scientific paradigm that manipulates both the motor and cognitive demands of a psychomotor experimental task.
