@@ -583,13 +583,21 @@ app.layout = dbc.Container([
                     dbc.Input(id='post-stim-window-input', type='number', value=2, step=0.05, size="sm", style={'width': '80px'}), # Added comma here
                     html.Div([
                         dbc.Button(
-                            "Discard Trial", 
-                            id="discard-button", 
-                            color="outline-danger", 
+                            "Discard EMG",
+                            id="discard-emg-button",
+                            color="outline-warning",
+                            size="sm",
+                            style={'width': '140px'},
+                            className="me-2"
+                        ),
+                        dbc.Button(
+                            "Discard Trial",
+                            id="discard-button",
+                            color="outline-danger",
                             size="sm",
                             style={'width': '140px'}
                         ),
-                    ], className="ms-auto")
+                    ], className="ms-auto d-flex")
                 ], className="d-flex align-items-center mb-3"),
                 html.Hr(className="my-2"),
                 # Trial viewer graph
@@ -636,6 +644,7 @@ app.layout.children.append(dcc.Store(id = 'force-channels-store'))
 app.layout.children.append(dcc.Store(id = 'emg-channels-store'))
 THRESHOLD_CACHE = {} # EMG threshold cache
 dcc.Store(id='discarded-trials-store', data = [], storage_type = 'session') # Store for discarded trials
+app.layout.children.append(dcc.Store(id='discarded-emg-store', data=[], storage_type='session'))
 # Navigation system
 # ---------------------------------------------------
 app.layout.children.append(dcc.Store(id = 'ui-generator-signal-store'))
@@ -1221,6 +1230,8 @@ def handle_trial_navigation(
     Output('current-trial-metrics-store', 'data'),
     Output('discard-button', 'children'),
     Output('discard-button', 'color'),
+    Output('discard-emg-button', 'children'),
+    Output('discard-emg-button', 'color'),
     # --- Triggers ---
     Input('block-selector-dropdown', 'value'),
     Input('trial-selector-dropdown', 'value'),
@@ -1229,6 +1240,7 @@ def handle_trial_navigation(
     Input('force-cutoff-input', 'value'),
         # --- Discarded Trials Store ---
     Input("discarded-trials-store", "data"),
+    Input("discarded-emg-store", "data"),
     # --- Data Sources ---
     State('condition-data-store', 'data'),
     State('signal-data-store', 'data'),
@@ -1261,7 +1273,7 @@ def handle_trial_navigation(
 )
 def update_trial_data(
     selected_block, selected_trial, force_filter_val, force_cutoff_hz,
-    current_discards,
+    current_discards, current_emg_discards,
     condition_data_dict, session_id,
     channel_map, trial_lookup_dict, pre_window, post_window,
     mvc_left, mvc_right,
@@ -1293,11 +1305,17 @@ def update_trial_data(
     global_index_to_use = matching_trials['global_index'].iloc[0]
 
     current_discards = current_discards or []
+    current_emg_discards = current_emg_discards or []
 
     if global_index_to_use in current_discards:
-        btn_text, btn_color = "Undo Discard", "success",
+        btn_text, btn_color = "Undo Discard", "success"
     else:
         btn_text, btn_color = "Discard Trial", "danger"
+
+    if global_index_to_use in current_emg_discards:
+        emg_btn_text, emg_btn_color = "Undo EMG Discard", "success"
+    else:
+        emg_btn_text, emg_btn_color = "Discard EMG", "warning"
 
     # Inverse mapping - standardize internal names
     inv_map = {v: k for k, v in channel_map.items() if v and v in full_df.columns}
@@ -1690,7 +1708,7 @@ def update_trial_data(
 
     stim_time = base_metrics.get('stim_time')
 
-    return fig, metrics_layout, stim_time, base_metrics, btn_text, btn_color
+    return fig, metrics_layout, stim_time, base_metrics, btn_text, btn_color, emg_btn_text, emg_btn_color
 
 
 # Callback for updating the trial viewer
@@ -1781,6 +1799,33 @@ def manage_discard_list(n_clicks, lookup_data, block, trial, current_discards):
     return new_discards
 
 @app.callback(
+    Output("discarded-emg-store", "data"),
+    Input("discard-emg-button", "n_clicks"),
+    [State("trial-lookup-store", "data"),
+     State("block-selector-dropdown", "value"),
+     State("trial-selector-dropdown", "value"),
+     State("discarded-emg-store", "data")],
+    prevent_initial_call=True
+)
+def manage_emg_discard_list(n_clicks, lookup_data, block, trial, current_emg_discards):
+    if block is None or trial is None:
+        raise PreventUpdate
+
+    lookup_df = pd.DataFrame(lookup_data)
+    idx = lookup_df.query("block_number == @block and trial_number == @trial")['global_index'].iloc[0]
+
+    current_emg_discards = current_emg_discards or []
+    new_emg_discards = list(current_emg_discards)
+
+    if idx in new_emg_discards:
+        new_emg_discards.remove(idx)
+    else:
+        new_emg_discards.append(idx)
+
+    return new_emg_discards
+
+
+@app.callback(
     Output("download-trial-csv", "data"),
     Input("btn-download-trial", "n_clicks"),
     [State('signal-data-store', 'data'),
@@ -1807,7 +1852,8 @@ def manage_discard_list(n_clicks, lookup_data, block, trial, current_discards):
      State('emg-min-duration-input', 'value'),
      State('emg-h-onset-input', 'value'), 
      State('emg-h-offset-input', 'value'),
-     State('discarded-trials-store', 'data')],
+     State('discarded-trials-store', 'data'),
+     State('discarded-emg-store', 'data')],
     prevent_initial_call=True,
 )
 def handle_bulk_metrics_download(n_clicks, session_id, *args):

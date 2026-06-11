@@ -18,11 +18,11 @@ import emg_analyses as ea
 
 def export_trial_metrics(
     full_df, trial_lookup, condition_data, channel_map,
-    mvc_left, mvc_right, pre_window, post_window, 
+    mvc_left, mvc_right, pre_window, post_window,
     min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
     run_peak_force, run_mrspt, run_mrt, run_fti, run_mean_force, run_rfd, rfd_window_ms,
     run_pmrt, run_emg_rms, emg_min_duration_ms, emg_h_onset, emg_h_offset,
-    current_discards
+    current_discards, current_discards_emg=None
 ):
     
     inv_map = {v: k for k, v in channel_map.items() if v and v in full_df.columns}
@@ -41,7 +41,8 @@ def export_trial_metrics(
                 trial_index=global_idx, channel_map=channel_map, mvc_left=mvc_left, mvc_right=mvc_right,
                 pre_window=pre_window, post_window=post_window
             )
-            base_metrics['discarded_flag'] = 1 if global_idx in current_discards else 0
+            base_metrics['discarded_flag'] = 1 if global_idx in (current_discards or []) else 0
+            base_metrics['discarded_emg'] = 1 if global_idx in (current_discards_emg or []) else 0
 
             # Peak Detection & Trial Status
             peak_info = fa.find_main_contraction_peak(
