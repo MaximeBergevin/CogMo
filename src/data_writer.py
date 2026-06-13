@@ -91,8 +91,8 @@ def export_trial_metrics(
                 baseline_data = fa.find_baseline_force(analysis_df, stim_t, response_hand)
                 baseline_val = baseline_data.get('mean')
                 
-                onset_t = fa.find_contraction_onset(analysis_df, stim_t, peak_time, peak_value, response_hand, mvc_val)
-                offset_t = fa.find_contraction_offset(analysis_df, peak_time, peak_value, response_hand, mvc_val)
+                onset_t = fa.find_contraction_onset(analysis_df, stim_t, peak_time, peak_value, response_hand, mvc_val, baseline_force=baseline_val or 0.0)
+                offset_t = fa.find_contraction_offset(analysis_df, peak_time, peak_value, response_hand, mvc_val, baseline_force=baseline_val or 0.0)
                 
                 base_metrics.update({
                     'peak_time': peak_time,

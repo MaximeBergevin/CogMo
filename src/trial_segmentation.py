@@ -196,10 +196,11 @@ def get_trial_data_and_metrics(
         'global_index': trial_index,
         'block': block_numb,
         'stim_time': stim_time,
-        'expected_response': expected_response, 
+        'expected_response': expected_response,
         'cognitive_demand': condition_row.get(cog_col) if cog_col else None,
         'motor_demand': motor_demand,
         'threshold': threshold,
+        'initial_response_hand': initial_response_hand,
     }
 
     return trial_view_df, base_metrics

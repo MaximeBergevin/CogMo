@@ -315,18 +315,22 @@ def find_contraction_offset(
     peak_time: float,
     peak_value: float,
     response_hand: str,
-    mvc_value: float
+    mvc_value: float,
+    baseline_force: float = 0.0
 ) -> Optional[float]:
     """
     Identifies the end of the force contraction (offset).
-    
-    Finds a stable post-peak baseline and sets a threshold (Mean + 3*SD). The 
+
+    Finds a stable post-peak baseline and sets a threshold (Mean + 3*SD). The
     offset is the first point after the peak where force returns below this threshold.
     """
     force_col = f"force_{response_hand}"
 
-    # Guard condition to avoid issues if peak force is very low
-    relative_guard = 0.20 * abs(peak_value)
+    # Guard scaled to contraction amplitude (peak above baseline), not raw peak value.
+    # This prevents failure on low-force trials where baseline drift consumes
+    # a large fraction of the absolute peak.
+    contraction_amplitude = abs(peak_value - baseline_force)
+    relative_guard = baseline_force + 0.20 * contraction_amplitude
     
     # --- Iteratively search for a stable post-peak baseline window ---
     baseline_start = peak_time + 0.150
@@ -405,16 +409,20 @@ def find_contraction_onset(
     peak_value: float,
     response_hand: str,
     mvc_value: float,
+    baseline_force: float = 0.0
 ) -> Optional[float]:
     """
     Identifies the onset by scanning backward from the peak.
-    Iteratively searches for a stable baseline before the contraction 
+    Iteratively searches for a stable baseline before the contraction
     to establish a 3SD threshold.
     """
     force_col = f"force_{response_hand}"
 
-    # Guard: Baseline must be < 20% of peak to avoid the contraction ramp
-    relative_guard = 0.20 * abs(peak_value)
+    # Guard scaled to contraction amplitude (peak above baseline), not raw peak value.
+    # This prevents failure on low-force trials where baseline drift consumes
+    # a large fraction of the absolute peak.
+    contraction_amplitude = abs(peak_value - baseline_force)
+    relative_guard = baseline_force + 0.20 * contraction_amplitude
     
     # --- Iterative search moving BACKWARD from peak ---
     # Start the search window just before the peak ramp

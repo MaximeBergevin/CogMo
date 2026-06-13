@@ -1356,11 +1356,22 @@ def update_trial_data(
     #  Analysis Pipeline
     # --------------------------
     
+    # Baseline-adjust the detection threshold before peak finding.
+    # initial_response_hand is used here since the true response_hand isn't known yet.
+    initial_hand = base_metrics.get('initial_response_hand', 'right')
+    pre_detection_baseline = fa.find_baseline_force(
+        signal_df=trial_view_df,
+        stim_time=base_metrics['stim_time'],
+        response_hand=initial_hand
+    )
+    pre_baseline = pre_detection_baseline['mean'] or 0.0
+    adjusted_threshold = (base_metrics['threshold'] + pre_baseline) if base_metrics['threshold'] is not None else None
+
     # Find the main contraction event, regardless of hand.
     peak_info = fa.find_main_contraction_peak(
         full_df=full_df,
         stim_time=base_metrics['stim_time'],
-        threshold=base_metrics['threshold'],
+        threshold=adjusted_threshold,
         min_valid_rt_s=min_valid_rt_s,
         min_prominence_n=min_prominence_n,
         search_window_pre_s=pre_stim_search_s,
@@ -1408,6 +1419,7 @@ def update_trial_data(
                     peak_value=base_metrics['peak_value'],
                     response_hand=base_metrics['response_hand'],
                     mvc_value=mvc_val,
+                    baseline_force=base_metrics.get('baseline_mean', 0.0),
                 )
                 base_metrics['force_onset_time'] = onset_time
 
@@ -1419,6 +1431,7 @@ def update_trial_data(
                     peak_value=base_metrics['peak_value'],
                     response_hand=base_metrics['response_hand'],
                     mvc_value=mvc_val,
+                    baseline_force=base_metrics.get('baseline_mean', 0.0),
                 )
                 base_metrics['force_offset_time'] = offset_time
                 
