@@ -224,7 +224,8 @@ def create_mock_signal_data(
     expected_auc_normalized = 0.0
     if len(burst_vals) > 1:
         # Ground truth AUC of the clean triangular burst
-        expected_auc = np.trapezoid(y=burst_vals, dx=time_increment)
+        _trapz = getattr(np, 'trapezoid', getattr(np, 'trapz', None))
+        expected_auc = _trapz(y=burst_vals, dx=time_increment)
         
         # Ground truth Normalized AUC (%MVC/s)
         # Formula: (AUC / Duration) / MVC * 100

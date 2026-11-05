@@ -1,18 +1,12 @@
-# Third-Party Dependencies
-# ----------------------------------------------------
+from typing import Optional, Dict, Any, Tuple, List
 import pandas as pd
+import numpy as np
 
 # Local Application Imports
 #---------------------------
-
 from get_condition_lookup import get_condition_lookup
 from data_loader import load_signal, find_best_match
 from trial_segmentation import get_trial_data_and_metrics, get_trial_segment, create_trial_lookup
-import force_analyses as fa
-import emg_analyses as ea
-
-import pandas as pd
-import numpy as np
 import force_analyses as fa
 import emg_analyses as ea
 
@@ -20,13 +14,27 @@ def export_trial_metrics(
     full_df, trial_lookup, condition_data, channel_map,
     mvc_left, mvc_right, pre_window, post_window,
     min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
-    run_peak_force, run_mrspt, run_mrt, run_fti, run_mean_force, run_rfd, rfd_window_ms,
+    run_peak_force, run_mrspt, run_mrt, run_fti, run_mean_force, run_rfd,
     run_pmrt, run_emg_rms, emg_min_duration_ms, emg_h_onset, emg_h_offset,
-    current_discards, current_discards_emg=None
+    current_discards, current_discards_emg=None,
+    custom_window_1=(0, 50), custom_window_2=(100, 200),
+    is_filter_enabled: bool = False,
+    force_cutoff_hz: Optional[float] = None
 ):
     
     inv_map = {v: k for k, v in channel_map.items() if v and v in full_df.columns}
     full_df = full_df.rename(columns=inv_map)
+
+    # Apply zero-phase Butterworth filter if enabled
+    if is_filter_enabled and force_cutoff_hz:
+        time_col = 'time' if 'time' in full_df.columns else channel_map.get('time')
+        if time_col and time_col in full_df.columns:
+            dt = np.median(np.diff(full_df[time_col].values))
+            if dt > 0:
+                fs = 1.0 / dt
+                for col in ['force_right', 'force_left']:
+                    if col in full_df.columns:
+                        full_df[col] = fa.apply_force_filter(full_df[col].values, fs=fs, cutoff=float(force_cutoff_hz))
 
     lookup_df = pd.DataFrame(trial_lookup)
     cond_df = pd.DataFrame(condition_data)
@@ -44,12 +52,21 @@ def export_trial_metrics(
             base_metrics['discarded_flag'] = 1 if global_idx in (current_discards or []) else 0
             base_metrics['discarded_emg'] = 1 if global_idx in (current_discards_emg or []) else 0
 
+            # Pre-detection baseline for both hands
+            pre_base_r = fa.find_baseline_force(signal_df=trial_view_df, stim_time=base_metrics['stim_time'], response_hand='right')
+            pre_base_l = fa.find_baseline_force(signal_df=trial_view_df, stim_time=base_metrics['stim_time'], response_hand='left')
+            pre_baseline_r = pre_base_r['mean'] or 0.0
+            pre_baseline_l = pre_base_l['mean'] or 0.0
+
+            adj_thresh_right = (base_metrics['threshold_right'] + pre_baseline_r) if base_metrics.get('threshold_right') is not None else None
+            adj_thresh_left = (base_metrics['threshold_left'] + pre_baseline_l) if base_metrics.get('threshold_left') is not None else None
+
             # Peak Detection & Trial Status
             peak_info = fa.find_main_contraction_peak(
                 full_df=full_df, stim_time=base_metrics['stim_time'],
-                threshold=base_metrics['threshold'], min_valid_rt_s=min_valid_rt_s,
-                min_prominence_n=min_prominence_n, search_window_pre_s=pre_stim_search_s,
-                search_window_post_s=post_stim_search_s
+                threshold_left=adj_thresh_left, threshold_right=adj_thresh_right,
+                min_valid_rt_s=min_valid_rt_s, min_prominence_n=min_prominence_n,
+                search_window_pre_s=pre_stim_search_s, search_window_post_s=post_stim_search_s
             )
             
             # --- Capture Peak Info & Status ---
@@ -58,6 +75,16 @@ def export_trial_metrics(
             peak_value = peak_info.get('peak_value')
             response_hand = peak_info.get('response_hand')
             analysis_df = peak_info.get('analysis_df')
+
+            # Update threshold to the responding hand's threshold
+            if response_hand == 'left':
+                base_metrics['threshold'] = base_metrics.get('threshold_left')
+            elif response_hand == 'right':
+                base_metrics['threshold'] = base_metrics.get('threshold_right')
+            elif base_metrics.get('expected_response') == 'left':
+                base_metrics['threshold'] = base_metrics.get('threshold_left')
+            else:
+                base_metrics['threshold'] = base_metrics.get('threshold_right')
             
             # Accuracy Logic
             # ---------------
@@ -90,6 +117,8 @@ def export_trial_metrics(
                 
                 baseline_data = fa.find_baseline_force(analysis_df, stim_t, response_hand)
                 baseline_val = baseline_data.get('mean')
+                if base_metrics['threshold'] is not None and baseline_val is not None:
+                    base_metrics['threshold'] = base_metrics['threshold'] + baseline_val
                 
                 onset_t = fa.find_contraction_onset(analysis_df, stim_t, peak_time, peak_value, response_hand, mvc_val, baseline_force=baseline_val or 0.0)
                 offset_t = fa.find_contraction_offset(analysis_df, peak_time, peak_value, response_hand, mvc_val, baseline_force=baseline_val or 0.0)
@@ -110,7 +139,11 @@ def export_trial_metrics(
                 if run_mrspt:
                     base_metrics['motor_response_time_ms'] = fa.motor_response_time(analysis_df, stim_t, peak_time, peak_value, base_metrics['threshold'], response_hand)
                 if run_rfd:
-                    base_metrics.update(fa.calculate_rfd(analysis_df, onset_t, peak_time, baseline_val, response_hand, rfd_window_ms))
+                    base_metrics.update(fa.calculate_rfd(
+                        analysis_df, onset_t, peak_time, baseline_val, response_hand,
+                        custom_window_1=custom_window_1, custom_window_2=custom_window_2,
+                        mvc_value=mvc_val
+                    ))
                 if run_fti:
                     base_metrics.update(fa.calculate_impulse(analysis_df, onset_t, offset_t, baseline_val, mvc_val, response_hand))
                 if run_mean_force:
@@ -119,13 +152,14 @@ def export_trial_metrics(
                 # EMG Analysis
                 if (channel_map.get('emg_left') and channel_map.get('emg_right')) and (run_pmrt or run_emg_rms):
                     try:
-                        on_thresh = ea.calculate_dynamic_threshold(analysis_df, channel_map, response_hand, 0.1, emg_h_onset)
-                        off_thresh = ea.calculate_dynamic_threshold(analysis_df, channel_map, response_hand, 0.1, emg_h_offset)
-                        emg_on, emg_off, _ = ea.find_emg_boundaries(analysis_df, channel_map, response_hand, stim_t, onset_t, offset_t, emg_min_duration_ms, on_thresh, off_thresh)
+                        on_thresh = ea.calculate_dynamic_threshold(analysis_df, response_hand, 0.1, emg_h_onset)
+                        off_thresh = ea.calculate_dynamic_threshold(analysis_df, response_hand, 0.1, emg_h_offset)
+                        emg_on, emg_off, _ = ea.find_emg_boundaries(analysis_df, response_hand, stim_t, onset_t, offset_t, emg_min_duration_ms, on_thresh, off_thresh)
                         if emg_on:
                             if run_pmrt: base_metrics['premotor_reaction_time_ms'] = ea.premotor_reaction_time(stim_t, emg_on)
-                            if run_emg_rms: base_metrics['emg_rms_volts'] = ea.calculate_emg_rms(analysis_df, channel_map, response_hand, emg_on, emg_off)
-                    except: pass
+                            if run_emg_rms: base_metrics['emg_rms_volts'] = ea.calculate_emg_rms(analysis_df, response_hand, emg_on, emg_off)
+                    except Exception:
+                        pass
             
             all_final_metrics.append(base_metrics)
 

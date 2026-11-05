@@ -408,7 +408,24 @@ app.layout = dbc.Container([
                             
                             html.H6("Rate of Force", className="mt-4"),
                             dbc.Checkbox(id="analysis-rfd-checkbox", label="Rate of Force Development (RFD)", value=True),
-                            dbc.Input(id="analysis-rfd-window-input", type="number", value=50, placeholder="e.g., 50", disabled=False, className="mt-2 w-50"),
+                            html.Div([
+                                html.Div([
+                                    dbc.Label("Custom Window 1 (ms):", className="small text-muted mb-1 d-block", id="rfd-w1-label"),
+                                    dbc.Row([
+                                        dbc.Col(dbc.Input(id="analysis-rfd-w1-start", type="number", value=0, min=0, step=5, size="sm"), width=5),
+                                        dbc.Col(html.Span("to", className="small text-muted d-flex align-items-center justify-content-center h-100"), width=2),
+                                        dbc.Col(dbc.Input(id="analysis-rfd-w1-end", type="number", value=50, min=0, step=5, size="sm"), width=5),
+                                    ], className="g-1 align-items-center mb-2"),
+                                ]),
+                                html.Div([
+                                    dbc.Label("Custom Window 2 (ms):", className="small text-muted mb-1 d-block", id="rfd-w2-label"),
+                                    dbc.Row([
+                                        dbc.Col(dbc.Input(id="analysis-rfd-w2-start", type="number", value=100, min=0, step=5, size="sm"), width=5),
+                                        dbc.Col(html.Span("to", className="small text-muted d-flex align-items-center justify-content-center h-100"), width=2),
+                                        dbc.Col(dbc.Input(id="analysis-rfd-w2-end", type="number", value=200, min=0, step=5, size="sm"), width=5),
+                                    ], className="g-1 align-items-center mb-2"),
+                                ]),
+                            ], className="ms-4 mt-2", style={"maxWidth": "240px"}),
 
                             html.H6("Force Magnitudes", className="mt-4"),
                             dbc.Checkbox(id="analysis-peak-force-checkbox", label="Peak Force & Overshoot", value=True),
@@ -516,7 +533,9 @@ app.layout = dbc.Container([
                     # --- Tooltips for all checkboxes ---
                     dbc.Tooltip("Time from stimulus onset to force onset.", target="analysis-mrt-checkbox"),
                     dbc.Tooltip("Time from force onset to peak force.", target="analysis-mrspt-checkbox"),
-                    dbc.Tooltip("The steepest slope of the force curve after force onset.", target="analysis-rfd-checkbox"),
+                    dbc.Tooltip("Calculates Rate of Force Development. Computes and exports the complete battery of standard physiological windows (0-25ms, 0-50ms, 0-100ms, 25-75ms, 50-100ms, 100-200ms) plus Peak RFD.", target="analysis-rfd-checkbox"),
+                    dbc.Tooltip("Custom interval relative to contraction onset (ms) for live trial inspection and export (default: 0 to 50 ms).", target="rfd-w1-label"),
+                    dbc.Tooltip("Second custom interval relative to contraction onset (ms) for live trial inspection and export (default: 100 to 200 ms).", target="rfd-w2-label"),
                     dbc.Tooltip("Time from stimulus onset to EMG onset.", target="analysis-pmrt-checkbox"),
                     dbc.Tooltip("The peak force achieved and the amount it exceeds the target.", target="analysis-peak-force-checkbox"),
                     dbc.Tooltip("The average force during a specified window.", target="analysis-mean-force-checkbox"),
@@ -1072,18 +1091,6 @@ def update_reference_values(mvc_left, mvc_right):
     return mvc_left, mvc_right
 
 
-# Callback to enable/disable the RFD window input
-# ------------------------------------------------
-@app.callback(
-    Output('analysis-rfd-window-input', 'disabled'),
-    Input('analysis-rfd-checkbox', 'value')
-)
-def toggle_rfd_input_disabled(is_checked):
-    """
-    Disables the RFD window input if the RFD analysis checkbox is unchecked.
-    """
-    return not is_checked
-
 # Callback to enable/disable the Force Cutoff Frequency input
 # --------------------------------------------------------------
 @app.callback(
@@ -1094,6 +1101,20 @@ def toggle_cutoff_sensitivity(filter_value):
     # If the list is empty ([]) or None, return True to keep it disabled
     # If it has [1], return False to enable it
     return not bool(filter_value)
+
+
+# Callback to enable/disable RFD custom window inputs
+# ---------------------------------------------------
+@app.callback(
+    Output("analysis-rfd-w1-start", "disabled"),
+    Output("analysis-rfd-w1-end", "disabled"),
+    Output("analysis-rfd-w2-start", "disabled"),
+    Output("analysis-rfd-w2-end", "disabled"),
+    Input("analysis-rfd-checkbox", "value")
+)
+def toggle_rfd_inputs_disabled(rfd_checked):
+    is_disabled = not bool(rfd_checked)
+    return is_disabled, is_disabled, is_disabled, is_disabled
 
 
 # Callback for block navigation
@@ -1262,7 +1283,10 @@ def handle_trial_navigation(
     State('analysis-fti-checkbox', 'value'),
     State('analysis-mean-force-checkbox', 'value'),
     State('analysis-rfd-checkbox', 'value'),
-    State('analysis-rfd-window-input', 'value'),
+    State('analysis-rfd-w1-start', 'value'),
+    State('analysis-rfd-w1-end', 'value'),
+    State('analysis-rfd-w2-start', 'value'),
+    State('analysis-rfd-w2-end', 'value'),
     # --- EMG Analysis Checkboxes ---
     State('analysis-pmrt-checkbox', 'value'),
     State('analysis-rms-checkbox', 'value'),
@@ -1279,7 +1303,8 @@ def update_trial_data(
     mvc_left, mvc_right,
     min_valid_rt_s, min_prominence_n, pre_stim_search_s, post_stim_search_s,
     run_peak_force, run_motor_response_time, run_motor_reaction_time, run_force_time_integral,
-    run_mean_force, run_rfd, rfd_window_ms,
+    run_mean_force, run_rfd,
+    rfd_w1_start, rfd_w1_end, rfd_w2_start, rfd_w2_end,
     run_pmrt, run_emg_rms,
     emg_min_duration_ms, emg_h_onset, emg_h_offset
 ):
@@ -1321,6 +1346,22 @@ def update_trial_data(
     inv_map = {v: k for k, v in channel_map.items() if v and v in full_df.columns}
     full_df = full_df.rename(columns = inv_map)
 
+    # Determine filtering state and apply zero-phase Butterworth filter if enabled
+    is_filter_enabled = 1 in (force_filter_val or [])
+    if is_filter_enabled and force_cutoff_hz:
+        time_col = 'time' if 'time' in full_df.columns else channel_map.get('time')
+        if time_col and time_col in full_df.columns:
+            dt = np.median(np.diff(full_df[time_col].values))
+            if dt > 0:
+                fs = 1.0 / dt
+                for col in ['force_right', 'force_left']:
+                    if col in full_df.columns:
+                        full_df[col] = fa.apply_force_filter(
+                            full_df[col].values,
+                            fs=fs,
+                            cutoff=float(force_cutoff_hz)
+                        )
+
     # Call function to get the base metrics (threshold, stim_time, etc.)
     # and the DataFrame for the user's visualization window.
     trial_view_df, base_metrics = get_trial_data_and_metrics(
@@ -1334,44 +1375,33 @@ def update_trial_data(
         pre_window=pre_window,
         post_window=post_window
     )
-    # Determine filterering state
-    is_filter_enabled = 1 in (force_filter_val or [])
-    # Process both full dataframe and trial view dataframe
-    if is_filter_enabled and force_cutoff_hz:
-        # Determine which hand's force to filter based on available channels
-        for hand in ['right', 'left']:
-            force_col = channel_map.get(f'force_{hand}')
-            if force_col and force_col in full_df.columns:
-                # Apply zero-phase Butterworth filter to the full dataset
-                full_df[force_col] = fa.apply_force_filter(
-                    full_df[force_col].values,
-                    cutoff = force_cutoff_hz
-                )
-                # Also update the view dataframe for consistent plotting
-                trial_view_df[force_col] = fa.apply_force_filter(
-                    trial_view_df[force_col].values,
-                    cutoff= force_cutoff_hz
-                )
 
     #  Analysis Pipeline
     # --------------------------
     
-    # Baseline-adjust the detection threshold before peak finding.
-    # initial_response_hand is used here since the true response_hand isn't known yet.
-    initial_hand = base_metrics.get('initial_response_hand', 'right')
-    pre_detection_baseline = fa.find_baseline_force(
+    # Pre-detection baseline adjustment per hand
+    pre_base_r = fa.find_baseline_force(
         signal_df=trial_view_df,
         stim_time=base_metrics['stim_time'],
-        response_hand=initial_hand
+        response_hand='right'
     )
-    pre_baseline = pre_detection_baseline['mean'] or 0.0
-    adjusted_threshold = (base_metrics['threshold'] + pre_baseline) if base_metrics['threshold'] is not None else None
+    pre_base_l = fa.find_baseline_force(
+        signal_df=trial_view_df,
+        stim_time=base_metrics['stim_time'],
+        response_hand='left'
+    )
+    pre_baseline_r = pre_base_r['mean'] or 0.0
+    pre_baseline_l = pre_base_l['mean'] or 0.0
 
-    # Find the main contraction event, regardless of hand.
+    adj_thresh_right = (base_metrics['threshold_right'] + pre_baseline_r) if base_metrics.get('threshold_right') is not None else None
+    adj_thresh_left = (base_metrics['threshold_left'] + pre_baseline_l) if base_metrics.get('threshold_left') is not None else None
+
+    # Find the main contraction event evaluating each hand against its own threshold
     peak_info = fa.find_main_contraction_peak(
         full_df=full_df,
         stim_time=base_metrics['stim_time'],
-        threshold=adjusted_threshold,
+        threshold_left=adj_thresh_left,
+        threshold_right=adj_thresh_right,
         min_valid_rt_s=min_valid_rt_s,
         min_prominence_n=min_prominence_n,
         search_window_pre_s=pre_stim_search_s,
@@ -1381,6 +1411,16 @@ def update_trial_data(
     # Set the initial status and the true responding hand from the peak finder
     base_metrics['trial_status'] = peak_info['status']
     base_metrics['response_hand'] = peak_info['response_hand']
+
+    # Update threshold to match the hand that actually responded (or expected hand if none)
+    if base_metrics['response_hand'] == 'left':
+        base_metrics['threshold'] = base_metrics.get('threshold_left')
+    elif base_metrics['response_hand'] == 'right':
+        base_metrics['threshold'] = base_metrics.get('threshold_right')
+    elif base_metrics.get('expected_response') == 'left':
+        base_metrics['threshold'] = base_metrics.get('threshold_left')
+    else:
+        base_metrics['threshold'] = base_metrics.get('threshold_right')
     
     # Run all subsequent analyses only if a valid peak was found.
     if peak_info['analysis_df'] is not None and base_metrics['response_hand'] is not None:
@@ -1495,21 +1535,19 @@ def update_trial_data(
         
         if run_rfd:
             if all(k in base_metrics for k in ['force_onset_time', 'peak_time', 'baseline_mean']):
+                w1 = (int(rfd_w1_start or 0), int(rfd_w1_end or 50))
+                w2 = (int(rfd_w2_start or 100), int(rfd_w2_end or 200))
                 rfd_metrics = fa.calculate_rfd(
                     signal_df=analysis_df,
                     onset_time=base_metrics['force_onset_time'],
                     peak_time=base_metrics['peak_time'],
                     baseline_force=base_metrics['baseline_mean'],
                     response_hand=base_metrics['response_hand'],
-                    early_rfd_window_ms=rfd_window_ms
+                    custom_window_1=w1,
+                    custom_window_2=w2,
+                    mvc_value=mvc_val
                 )
                 base_metrics.update(rfd_metrics)
-                
-                # Perform normalization for RFD
-                if 'early_rfd' in base_metrics and base_metrics['early_rfd'] is not None:
-                    base_metrics['early_rfd_pct'] = (base_metrics['early_rfd'] / mvc_val) * 100
-                if 'peak_rfd' in base_metrics and base_metrics['peak_rfd'] is not None:
-                    base_metrics['peak_rfd_pct'] = (base_metrics['peak_rfd'] / mvc_val) * 100
 
         # EMG Analysis Section
         # ---------------------
@@ -1671,9 +1709,16 @@ def update_trial_data(
         create_metric_p("Mean Force", "mean_force", "N"),
         create_metric_p("Overshoot/Undershoot", "delta_threshold", "N"),
     ]
+    w1_s = int(rfd_w1_start or 0)
+    w1_e = int(rfd_w1_end or 50)
+    w2_s = int(rfd_w2_start or 100)
+    w2_e = int(rfd_w2_end or 200)
+
     rate_metrics = [
-        create_metric_p(f"Early RFD (0-{rfd_window_ms}ms)", "early_rfd", "N/s"),
-        create_metric_p("Early RFD (% Max)", "early_rfd_pct", "%"),
+        create_metric_p(f"RFD 1 ({w1_s}-{w1_e}ms)", "custom_rfd_1", "N/s"),
+        create_metric_p(f"RFD 1 (% Max)", "custom_rfd_1_pct", "%"),
+        create_metric_p(f"RFD 2 ({w2_s}-{w2_e}ms)", "custom_rfd_2", "N/s"),
+        create_metric_p(f"RFD 2 (% Max)", "custom_rfd_2_pct", "%"),
         create_metric_p("Peak RFD", "peak_rfd", "N/s"),
         create_metric_p("Peak RFD (% Max)", "peak_rfd_pct", "%"),
     ]
@@ -1859,14 +1904,19 @@ def manage_emg_discard_list(n_clicks, lookup_data, block, trial, current_emg_dis
      State('analysis-fti-checkbox', 'value'),
      State('analysis-mean-force-checkbox', 'value'), 
      State('analysis-rfd-checkbox', 'value'),
-     State('analysis-rfd-window-input', 'value'), 
      State('analysis-pmrt-checkbox', 'value'),
      State('analysis-rms-checkbox', 'value'), 
      State('emg-min-duration-input', 'value'),
      State('emg-h-onset-input', 'value'), 
      State('emg-h-offset-input', 'value'),
      State('discarded-trials-store', 'data'),
-     State('discarded-emg-store', 'data')],
+     State('discarded-emg-store', 'data'),
+     State('analysis-rfd-w1-start', 'value'),
+     State('analysis-rfd-w1-end', 'value'),
+     State('analysis-rfd-w2-start', 'value'),
+     State('analysis-rfd-w2-end', 'value'),
+     State('force-filter-check', 'value'),
+     State('force-cutoff-input', 'value')],
     prevent_initial_call=True,
 )
 def handle_bulk_metrics_download(n_clicks, session_id, *args):
@@ -1877,8 +1927,22 @@ def handle_bulk_metrics_download(n_clicks, session_id, *args):
     app_temp_dir = Path(tempfile.gettempdir()) / "CogMo-App"
     full_df = pd.read_feather(app_temp_dir / f"{session_id}.feather")
     
+    # Extract filter parameters (last 2 args) and custom window parameters (previous 4 args)
+    filter_val, cutoff_hz = args[-2:]
+    w1_s, w1_e, w2_s, w2_e = args[-6:-2]
+    main_args = args[:-6]
+    custom_w1 = (int(w1_s or 0), int(w1_e or 50))
+    custom_w2 = (int(w2_s or 100), int(w2_e or 200))
+    is_filter_enabled = 1 in (filter_val or [])
+
     # Call the helper
-    final_df = dw.export_trial_metrics(full_df, *args)
+    final_df = dw.export_trial_metrics(
+        full_df, *main_args,
+        custom_window_1=custom_w1,
+        custom_window_2=custom_w2,
+        is_filter_enabled=is_filter_enabled,
+        force_cutoff_hz=cutoff_hz
+    )
     
     return dcc.send_data_frame(final_df.to_csv, f"CogMo_Bulk_Export_{session_id}.csv", index=False)
 

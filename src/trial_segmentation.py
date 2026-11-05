@@ -175,21 +175,28 @@ def get_trial_data_and_metrics(
     
     motor_demand = condition_row.get(motor_col) if motor_col else None
     
-    # Refactor line 180 to this:
-    initial_response_hand = 'right' if trial_view_df['force_right'].max() > trial_view_df['force_left'].max() else 'left'   
-    
-    threshold = None
-    mvc_value = mvc_right if initial_response_hand == 'right' else mvc_left
-    if motor_demand is not None and mvc_value is not None:
+    # Calculate target multiplier and hand-specific thresholds
+    target_multiplier = None
+    if motor_demand is not None:
         try:
-            multiplier = float(motor_demand)
-            threshold = multiplier * mvc_value
+            target_multiplier = float(motor_demand)
         except (ValueError, TypeError):
             motor_demand_str = str(motor_demand).lower()
             if 'low' in motor_demand_str:
-                threshold = 0.05 * mvc_value
+                target_multiplier = 0.05
             elif 'high' in motor_demand_str:
-                threshold = 0.30 * mvc_value
+                target_multiplier = 0.30
+
+    threshold_left = (target_multiplier * mvc_left) if (target_multiplier is not None and mvc_left is not None) else None
+    threshold_right = (target_multiplier * mvc_right) if (target_multiplier is not None and mvc_right is not None) else None
+
+    # Default threshold based on expected response hand, fallback to available hand threshold
+    if expected_response == 'left':
+        default_threshold = threshold_left
+    elif expected_response == 'right':
+        default_threshold = threshold_right
+    else:
+        default_threshold = threshold_right if threshold_right is not None else threshold_left
 
     base_metrics = {
         'participant_id': condition_row.get(id_col) if id_col else None,
@@ -199,8 +206,11 @@ def get_trial_data_and_metrics(
         'expected_response': expected_response,
         'cognitive_demand': condition_row.get(cog_col) if cog_col else None,
         'motor_demand': motor_demand,
-        'threshold': threshold,
-        'initial_response_hand': initial_response_hand,
+        'target_multiplier': target_multiplier,
+        'threshold_left': threshold_left,
+        'threshold_right': threshold_right,
+        'threshold': default_threshold,
+        'initial_response_hand': expected_response or 'right',
     }
 
     return trial_view_df, base_metrics

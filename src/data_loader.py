@@ -18,6 +18,8 @@ def _is_data_row(line_text: str, delimiter: str = '\t') -> bool:
     Calculates the ratio of numeric fields to total fields. If more than 50% 
     of the columns in a line are numeric, it is classified as a data row.
     """
+    if '=' in line_text:
+        return False
     fields = line_text.strip().split(delimiter)
     numeric_count = 0
     if len(fields) < 2: return False
@@ -62,7 +64,7 @@ def load_signal(filepath: Path) -> tuple[pd.DataFrame, dict]:
         # Inner helper to group markers (e.g., 'stim_left' -> 'stim')
         def get_comment_base(comment_str):
             """Removes direction suffixes to find the base name."""
-            if not isinstance(comment_str, str):
+            if not isinstance(comment_str, str) or comment_str.count('#') > 1:
                 return ""
             base = re.sub(r'[-_\s]?(left|right|none|l|r|n)$', '', comment_str, flags=re.IGNORECASE)
             return base.strip()

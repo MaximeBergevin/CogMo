@@ -1,39 +1,55 @@
 # src/force_analyses.py
 # Standard Library Imports
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple, Sequence
 # Third-party dependencies
 import pandas as pd
 import numpy as np
 from scipy import signal
 
-def apply_force_filter(force_series, cutoff=50, order=4):
+def apply_force_filter(
+    data,
+    fs: Optional[float] = None,
+    cutoff: float = 50.0,
+    order: int = 4
+):
     """
-    Applies a zero-phase Butterworth low-pass filter to a Pandas Series.
-    Automatically derives fs from the series index.
+    Applies a zero-phase Butterworth low-pass filter to a Pandas Series, NumPy array, or Sequence.
+    
+    If fs is not provided and data is a pd.Series, attempts to derive fs from data.index (if dt > 0).
+    Uses scipy.signal.filtfilt to achieve zero-phase distortion (no phase lag / time delay).
     """
-    if force_series is None or len(force_series) < 27:
-        return force_series
+    if data is None or len(data) < 27:
+        return data
 
-    # Calculate fs from the series index (dt)
-    try:
-        dt = np.median(np.diff(force_series.index.values))
-        if dt <= 0:
-            return force_series
-        
-        fs = 1.0 / dt
-    except Exception:
-        return force_series
+    is_series = isinstance(data, pd.Series)
+    raw_values = data.values if is_series else np.asarray(data)
+
+    if fs is None and is_series:
+        try:
+            dt = np.median(np.diff(data.index.values))
+            if dt > 0:
+                fs = 1.0 / dt
+        except Exception:
+            pass
+
+    if fs is None or fs <= 0:
+        return data
 
     nyquist = 0.5 * fs
-    if cutoff >= nyquist:
-        return force_series
-        
+    if cutoff >= nyquist or cutoff <= 0:
+        return data
+
     normal_cutoff = cutoff / nyquist
     b, a = signal.butter(order, normal_cutoff, btype='low', analog=False)
-    
-    # Return as the same type (Series) to maintain indices
-    filtered_values = signal.filtfilt(b, a, force_series.values)
-    return pd.Series(filtered_values, index=force_series.index, name=force_series.name)
+
+    filtered_values = signal.filtfilt(b, a, raw_values)
+
+    if is_series:
+        return pd.Series(filtered_values, index=data.index, name=data.name)
+    elif isinstance(data, np.ndarray):
+        return filtered_values
+    else:
+        return list(filtered_values)
 
 
 def calculate_impulse(
@@ -66,7 +82,8 @@ def calculate_impulse(
     contraction_df['force_corrected'] = contraction_df[force_col] - baseline_force
     
     # Calculate Area Under the Curve (Impulse) using NumPy's trapezoidal rule
-    impulse_auc = np.trapezoid(y=contraction_df['force_corrected'], x=contraction_df['time'])
+    _trapz = getattr(np, 'trapezoid', getattr(np, 'trapz', None))
+    impulse_auc = _trapz(y=contraction_df['force_corrected'], x=contraction_df['time'])
     
     # Normalization
     contraction_duration = offset_time - onset_time
@@ -121,61 +138,125 @@ def calculate_mean_force(
     }
 
 
+DEFAULT_RFD_WINDOWS: Tuple[Tuple[int, int], ...] = (
+    (0, 25),
+    (0, 50),
+    (0, 100),
+    (25, 75),
+    (50, 100),
+    (100, 200)
+)
+
+
 def calculate_rfd(
     signal_df: pd.DataFrame,
     onset_time: Optional[float],
     peak_time: Optional[float],
     baseline_force: Optional[float],
     response_hand: str,
-    early_rfd_window_ms: int
+    windows: Sequence[Tuple[int, int]] = DEFAULT_RFD_WINDOWS,
+    custom_window_1: Optional[Tuple[int, int]] = None,
+    custom_window_2: Optional[Tuple[int, int]] = None,
+    mvc_value: Optional[float] = None,
+    peak_window_s: float = 0.020
 ) -> Dict[str, Any]:
     """
-    Calculates Rate of Force Development (RFD) metrics.
+    Calculates Rate of Force Development (RFD) metrics across arbitrary time windows
+    relative to contraction onset, as well as peak sliding RFD.
     
-    1. Early RFD: The slope of the force rise over a fixed window (e.g., 0-50ms).
-    2. Peak RFD: The maximum instantaneous slope found within a 20ms sliding window.
+    1. Canonical Literature Battery (default windows: 0-25, 0-50, 0-100, 25-75, 50-100, 100-200ms).
+    2. Custom User-Defined Windows (custom_window_1, custom_window_2).
+    3. Peak RFD: The maximum instantaneous slope found within a sliding window (default 20ms).
     """
     force_col = f"force_{response_hand}"
 
+    if custom_window_1 is None:
+        custom_window_1 = (0, 50)
+    if custom_window_2 is None:
+        custom_window_2 = (100, 200)
+
+    # Collect all unique windows to compute
+    all_windows = list(windows)
+    if custom_window_1 not in all_windows:
+        all_windows.append(custom_window_1)
+    if custom_window_2 not in all_windows:
+        all_windows.append(custom_window_2)
+
+    def _empty_results() -> Dict[str, Any]:
+        res: Dict[str, Any] = {}
+        for w_start, w_end in all_windows:
+            res[f"rfd_{w_start}_{w_end}"] = None
+            res[f"rfd_{w_start}_{w_end}_pct"] = None
+        res['custom_rfd_1'] = None
+        res['custom_rfd_1_pct'] = None
+        res['custom_rfd_1_window'] = f"{custom_window_1[0]}-{custom_window_1[1]}"
+        res['custom_rfd_2'] = None
+        res['custom_rfd_2_pct'] = None
+        res['custom_rfd_2_window'] = f"{custom_window_2[0]}-{custom_window_2[1]}"
+        res['early_rfd'] = None
+        res['early_rfd_pct'] = None
+        res['late_rfd'] = None
+        res['late_rfd_pct'] = None
+        res['peak_rfd'] = None
+        res['peak_rfd_pct'] = None
+        return res
+
     if (onset_time is None or peak_time is None or baseline_force is None or
             peak_time <= onset_time):
-        return {'early_rfd': None, 'peak_rfd': None}
+        return _empty_results()
 
     contraction_df = signal_df[
         (signal_df['time'] >= onset_time) & (signal_df['time'] <= peak_time)
     ].copy()
 
     if len(contraction_df) < 2:
-        return {'early_rfd': None, 'peak_rfd': None}
+        return _empty_results()
 
     force_corrected = contraction_df[force_col] - baseline_force
     time_seconds = contraction_df['time']
 
-    # --- 1. Calculate Early RFD ---
-    early_rfd = None
-    early_rfd_window_s = early_rfd_window_ms / 1000.0
-    end_time = onset_time + early_rfd_window_s
-    
-    early_df_slice = contraction_df[contraction_df['time'] <= end_time]
-    
-    if len(early_df_slice) > 1:
-        force_at_start = force_corrected.iloc[0]
-        force_at_end = force_corrected.loc[early_df_slice.index[-1]]
-        time_at_end = early_df_slice['time'].iloc[-1]
-        
-        delta_time = time_at_end - onset_time
-        if delta_time > 0:
-            early_rfd = (force_at_end - force_at_start) / delta_time
+    # --- Helper: Interval Slope ---
+    def _compute_interval_slope(t_start: float, t_end: float) -> Optional[float]:
+        sub_slice = contraction_df[(contraction_df['time'] >= t_start) & (contraction_df['time'] <= t_end)]
+        if len(sub_slice) < 2:
+            return None
+        delta_f = force_corrected.loc[sub_slice.index[-1]] - force_corrected.loc[sub_slice.index[0]]
+        delta_t = sub_slice['time'].iloc[-1] - sub_slice['time'].iloc[0]
+        return float(delta_f / delta_t) if delta_t > 0 else None
 
-    # --- 2. Calculate Peak RFD (Late RFD) ---
-    
+    # --- Compute all requested windows ---
+    results: Dict[str, Any] = {}
+    for start_ms, end_ms in all_windows:
+        t0 = onset_time + (start_ms / 1000.0)
+        t1 = onset_time + (end_ms / 1000.0)
+        slope = _compute_interval_slope(t0, t1)
+        slope_pct = (slope / mvc_value * 100.0) if (slope is not None and mvc_value and mvc_value > 0) else None
+        results[f"rfd_{start_ms}_{end_ms}"] = slope
+        results[f"rfd_{start_ms}_{end_ms}_pct"] = slope_pct
+
+    # --- Custom User-Defined Windows ---
+    results['custom_rfd_1'] = results.get(f"rfd_{custom_window_1[0]}_{custom_window_1[1]}")
+    results['custom_rfd_1_pct'] = results.get(f"rfd_{custom_window_1[0]}_{custom_window_1[1]}_pct")
+    results['custom_rfd_1_window'] = f"{custom_window_1[0]}-{custom_window_1[1]}"
+
+    results['custom_rfd_2'] = results.get(f"rfd_{custom_window_2[0]}_{custom_window_2[1]}")
+    results['custom_rfd_2_pct'] = results.get(f"rfd_{custom_window_2[0]}_{custom_window_2[1]}_pct")
+    results['custom_rfd_2_window'] = f"{custom_window_2[0]}-{custom_window_2[1]}"
+
+    # --- Semantic Aliases ---
+    results['early_rfd'] = results.get('custom_rfd_1')
+    results['early_rfd_pct'] = results.get('custom_rfd_1_pct')
+    results['late_rfd'] = results.get('custom_rfd_2')
+    results['late_rfd_pct'] = results.get('custom_rfd_2_pct')
+
+    # --- Peak RFD (Sliding Window) ---
     force_array = force_corrected.to_numpy()
     time_array = time_seconds.to_numpy()
     
     # Get the median time between samples
     dt = np.median(np.diff(time_array))
-    # Calculate how many samples are in a 20ms window
-    window_samples = int(round(0.020 / dt))
+    # Calculate how many samples are in a sliding window (default 20ms)
+    window_samples = int(round(peak_window_s / dt))
     
     if window_samples < 1:
         window_samples = 1 # Ensure at least 1 sample difference
@@ -184,7 +265,6 @@ def calculate_rfd(
         peak_rfd = None # Not enough data to calculate a slope
     else:
         # Calculate the vectorized differences
-        n = len(force_array)
         end_vals = force_array[window_samples:]
         start_vals = force_array[:-window_samples]
         
@@ -194,12 +274,12 @@ def calculate_rfd(
         slopes = (end_vals - start_vals) / dt_vals
         
         # Find the maximum slope
-        peak_rfd = np.max(slopes)
+        peak_rfd = float(np.max(slopes))
 
-    return {
-        'early_rfd': early_rfd,
-        'peak_rfd': peak_rfd
-    }
+    results['peak_rfd'] = peak_rfd
+    results['peak_rfd_pct'] = (peak_rfd / mvc_value * 100.0) if (peak_rfd is not None and mvc_value and mvc_value > 0) else None
+
+    return results
 
 
 def find_baseline_force(
@@ -499,16 +579,19 @@ def find_contraction_onset(
 def find_main_contraction_peak(
     full_df: pd.DataFrame,
     stim_time: float,
-    threshold: float,     
-    min_valid_rt_s: float,
-    min_prominence_n: float,
-    search_window_pre_s: float,
-    search_window_post_s: float,
-    noise_shield: float = 0.2  #
+    threshold: Optional[float] = None,     
+    min_valid_rt_s: float = 0.100,
+    min_prominence_n: float = 5.0,
+    search_window_pre_s: float = 0.5,
+    search_window_post_s: float = 2.0,
+    noise_shield: float = 0.2,
+    threshold_left: Optional[float] = None,
+    threshold_right: Optional[float] = None
 ) -> Dict[str, Any]:
     """
-    Identifies the primary contraction peak using a double-threshold approach.
-    Prioritizes the earliest crossing of the main 'threshold', falling back 
+    Identifies the primary contraction peak using a competitive, hand-specific
+    double-threshold approach.
+    Prioritizes the earliest crossing of the hand's target threshold, falling back 
     to the highest prominence peak that stays above the 'noise_shield'.
     """
     import pandas as pd
@@ -523,7 +606,7 @@ def find_main_contraction_peak(
     search_df = full_df[(full_df['time'] >= search_start) & (full_df['time'] <= search_end)].copy()
 
     if search_df.empty:
-        return {'status': 'omission', 'peak_time': None, 'peak_value': None, 'response_hand': None, 'analysis_df': None}
+        return {'status': 'omission', 'peak_time': None, 'peak_value': None, 'response_hand': None, 'analysis_df': None, 'threshold': None}
 
     # 2. Extract Peaks Safely (Decimal prominence allowed)
     # -----------------------------------------------------------------
@@ -534,16 +617,24 @@ def find_main_contraction_peak(
             peaks['prominence'] = props['prominences']
             peaks['hand'] = hand_name
             peaks['abs_force'] = peaks[col]
+            hand_thresh = threshold_right if hand_name == 'right' else threshold_left
+            if hand_thresh is None:
+                hand_thresh = threshold
+            peaks['hand_threshold'] = hand_thresh
             return peaks
-        return pd.DataFrame(columns=list(df.columns) + ['prominence', 'hand', 'abs_force'])
+        return pd.DataFrame(columns=list(df.columns) + ['prominence', 'hand', 'abs_force', 'hand_threshold'])
 
     right_peaks = get_peaks(search_df, force_r_col, 'right')
     left_peaks = get_peaks(search_df, force_l_col, 'left')
     
-    all_peaks_df = pd.concat([right_peaks, left_peaks]).sort_values(by='time')
+    valid_dfs = [df for df in [right_peaks, left_peaks] if not df.empty]
+    if valid_dfs:
+        all_peaks_df = pd.concat(valid_dfs).sort_values(by='time')
+    else:
+        all_peaks_df = pd.DataFrame(columns=['time', 'prominence', 'hand', 'abs_force', 'hand_threshold'])
 
     if all_peaks_df.empty:
-        return {'status': 'omission', 'peak_time': None, 'peak_value': None, 'response_hand': None, 'analysis_df': None}
+        return {'status': 'omission', 'peak_time': None, 'peak_value': None, 'response_hand': None, 'analysis_df': None, 'threshold': None}
 
     # 3. Competitive Selection with Double Threshold
     # ----------------------------------------------------------
@@ -555,8 +646,9 @@ def find_main_contraction_peak(
     status = 'omission'
 
     if not valid_candidates.empty:
-        # THRESHOLD 1: The Main Target (e.g., 3.0 N)
-        above_target = valid_candidates[valid_candidates['abs_force'] >= threshold]
+        # THRESHOLD 1: The Main Target (evaluated against each candidate's hand-specific threshold)
+        has_thresh = valid_candidates['hand_threshold'].notna()
+        above_target = valid_candidates[has_thresh & (valid_candidates['abs_force'] >= valid_candidates['hand_threshold'])]
 
         if not above_target.empty:
             # RULE 1: Earliest peak to hit the target
@@ -564,7 +656,6 @@ def find_main_contraction_peak(
             status = 'valid'
         else:
             # THRESHOLD 2: The Noise Shield (e.g., 0.2 N)
-            # This ignores the 'silent' hand noise seen in image_8efb3e.jpg
             real_attempts = valid_candidates[valid_candidates['abs_force'] > noise_shield]
             
             if not real_attempts.empty:
@@ -580,11 +671,12 @@ def find_main_contraction_peak(
         status = 'false_start'
     
     if target_peak is None:
-        return {'status': status, 'peak_time': None, 'peak_value': None, 'response_hand': None, 'analysis_df': None}
+        return {'status': status, 'peak_time': None, 'peak_value': None, 'response_hand': None, 'analysis_df': None, 'threshold': None}
     
     peak_time = target_peak['time']
     response_hand = target_peak['hand']
     peak_value = target_peak['abs_force']
+    target_threshold = target_peak['hand_threshold'] if ('hand_threshold' in target_peak and pd.notna(target_peak['hand_threshold'])) else threshold
 
     # 4. Create Analysis Window
     analysis_start = stim_time - 0.5
@@ -596,7 +688,8 @@ def find_main_contraction_peak(
         'peak_time': peak_time,
         'peak_value': peak_value,
         'response_hand': response_hand,
-        'analysis_df': analysis_df
+        'analysis_df': analysis_df,
+        'threshold': target_threshold
     }
 
 
